@@ -1,0 +1,7 @@
+{
+  "_doc": "Mémoire du tri du courrier indésirable. Lu et mis à jour par le skill tri-spam-outlook. Adresses ou domaines en minuscules.",
+  "legitimes": { "notifications@example.com": "Exemple de service" },
+  "desabonnes": {},
+  "spam_confirme_domaines": [],
+  "historique": []
+}
