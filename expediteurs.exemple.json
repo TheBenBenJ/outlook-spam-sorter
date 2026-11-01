@@ -1,7 +1,18 @@
 {
-  "_doc": "Mémoire du tri du courrier indésirable. Lu et mis à jour par le skill tri-spam-outlook. Adresses ou domaines en minuscules.",
-  "legitimes": { "notifications@example.com": "Exemple de service" },
+  "_doc": "Mémoire du tri du courrier indésirable. Lu et mis à jour par passage.mjs et ses scripts. Adresses ou domaines en minuscules.",
+  "legitimes": {
+    "notifications@example.com": "Exemple de service"
+  },
   "desabonnes": {},
   "spam_confirme_domaines": [],
-  "historique": []
+  "historique": [],
+  "moi": [
+    "mon.adresse@hotmail.fr"
+  ],
+  "gmail_connus": "",
+  "libelles_bruit": [],
+  "recuperer_depuis": "2000-01-01",
+  "profil": "/chemin/du/profil/playwright",
+  "reinjecter": "/chemin/du/script/de/depot",
+  "libelles_non_fiables": []
 }

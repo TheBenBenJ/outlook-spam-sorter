@@ -1,0 +1,9 @@
+{
+  "name": "tri-spam-outlook",
+  "private": true,
+  "type": "module",
+  "description": "Passage quotidien sur Outlook.com, sans IA au volant du navigateur",
+  "dependencies": {
+    "playwright-core": "1.64.0-alpha-1790635538000"
+  }
+}

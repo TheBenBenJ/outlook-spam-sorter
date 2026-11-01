@@ -1,5 +1,7 @@
 expediteurs.json
-mcp.json
+etat-outlook.json
+approuves.json
 travail/
 *.tmp
 .DS_Store
+node_modules/
