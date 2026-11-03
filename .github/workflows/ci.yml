@@ -1,0 +1,88 @@
+# Light CI: syntax checks only. No secret, no deployment, no connection to the Mac
+# or to Outlook.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**.md']
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14' # as on the Mac (Homebrew)
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26' # as on the Mac (Homebrew), which runs the .mjs scripts
+
+      - name: Install zsh
+        run: |
+          sudo apt-get install -y -qq zsh > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq zsh > /dev/null; }
+
+      - name: List scripts by language
+        # Without an extension, the shebang decides; lancer.sh is a zsh script. Links are skipped.
+        run: |
+          git ls-files -z | while IFS= read -r -d '' f; do
+            [ -f "$f" ] && [ ! -L "$f" ] || continue
+            case "${f##*/}" in
+              *.py) echo "$f" >> "$RUNNER_TEMP/python.list"; continue ;;
+              *.js|*.mjs|*.cjs) echo "$f" >> "$RUNNER_TEMP/node.list"; continue ;;
+              *.json) echo "$f" >> "$RUNNER_TEMP/json.list"; continue ;;
+              *.sh) ;;
+              *.*) continue ;;
+            esac
+            case "$(head -n 1 "$f")" in
+              '#!'*zsh*) echo "$f" >> "$RUNNER_TEMP/zsh.list" ;;
+              '#!'*bash*|'#!'*/sh|'#!'*/sh' '*) echo "$f" >> "$RUNNER_TEMP/bash.list" ;;
+              '#!'*python*) echo "$f" >> "$RUNNER_TEMP/python.list" ;;
+              '#!'*node*) echo "$f" >> "$RUNNER_TEMP/node.list" ;;
+            esac
+          done
+          touch "$RUNNER_TEMP"/{python,node,json,bash,zsh}.list
+          wc -l "$RUNNER_TEMP"/*.list
+
+      - name: Python (py_compile)
+        run: |
+          status=0
+          while IFS= read -r f; do python -m py_compile "$f" || status=1; done < "$RUNNER_TEMP/python.list"
+          exit $status
+
+      - name: JavaScript (node --check)
+        run: |
+          status=0
+          while IFS= read -r f; do node --check "$f" || status=1; done < "$RUNNER_TEMP/node.list"
+          exit $status
+
+      - name: bash (bash -n, shellcheck -S error)
+        run: |
+          status=0
+          while IFS= read -r f; do bash -n "$f" || status=1; done < "$RUNNER_TEMP/bash.list"
+          if [ -s "$RUNNER_TEMP/bash.list" ]; then tr '\n' '\0' < "$RUNNER_TEMP/bash.list" | xargs -0 shellcheck -S error || status=1; fi
+          exit $status
+
+      - name: zsh (zsh -n)
+        run: |
+          status=0
+          while IFS= read -r f; do zsh -n "$f" || status=1; done < "$RUNNER_TEMP/zsh.list"
+          exit $status
+
+      - name: JSON (json.tool)
+        run: |
+          status=0
+          while IFS= read -r f; do python -m json.tool "$f" > /dev/null || status=1; done < "$RUNNER_TEMP/json.list"
+          exit $status
