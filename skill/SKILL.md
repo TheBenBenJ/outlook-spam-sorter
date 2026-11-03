@@ -15,7 +15,7 @@ launchd lance `lancer.sh` chaque matin, qui lance `daily-pass.mjs` : un script, 
    - `spam_connu`, ou `a_classer` jugé spam à 0,8 ou plus : « Supprimer », par lots ; ces mails restent 30 jours dans Éléments supprimés.
    - Le reste ne bouge pas et compte dans « à vérifier ».
 2. **Boîte de réception** : `analyze.py inbox`.
-   - `recuperer`, jugé légitime : téléchargement de l'original en .eml, dépôt dans Gmail (script `reinjecter` des réglages, qui n'accepte qu'un expéditeur connu et authentifié), « Archiver ». Depuis le 02/11/2026, `reinjecter` vaut `~/.local/share/pc-serveur/mac/reinject-via-server` (dépôt home-server) : le mail part au serveur maison (relais du Mac), qui le dépose avec l'autorisation OAuth du tri des mails. Retour à l'ancien dépôt local, par le mot de passe d'application : remettre `~/.local/share/tri-mails/reinjecter.py` dans `expediteurs.json`.
+   - `recuperer`, jugé légitime : téléchargement de l'original en .eml, dépôt dans Gmail (script `reinjecter` des réglages, qui n'accepte qu'un expéditeur connu et authentifié), « Archiver ». Depuis le 02/11/2026, `reinjecter` vaut `~/.local/share/home-server/mac/reinject-via-server` (dépôt home-server) : le mail part au serveur maison (relais du Mac), qui le dépose avec l'autorisation OAuth du tri des mails. Retour à l'ancien dépôt local, par le mot de passe d'application : remettre `~/.local/share/tri-mails/reinjecter.py` dans `expediteurs.json`.
    - `archiver` (déjà dans Gmail, publicité, inconnu ancien) : « Archiver », par lots.
    - `a_verifier` (inconnu récent) : ne bouge pas.
 3. **Liste blanche** : les expéditeurs récupérés qu'elle n'a pas encore.
