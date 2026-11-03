@@ -1,18 +1,18 @@
 {
-  "_doc": "Mémoire du tri du courrier indésirable. Lu et mis à jour par daily-pass.mjs et ses scripts. Adresses ou domaines en minuscules.",
+  "_doc": "Memory of the junk mail triage, read and updated by daily-pass.mjs and its helper scripts. Addresses and domains in lowercase. Keys are documented in the README.",
   "legitimes": {
-    "notifications@example.com": "Exemple de service"
+    "notifications@example.com": "Example service"
   },
   "desabonnes": {},
   "spam_confirme_domaines": [],
   "historique": [],
   "moi": [
-    "mon.adresse@hotmail.fr"
+    "me@example.com"
   ],
   "gmail_connus": "",
   "libelles_bruit": [],
   "recuperer_depuis": "2000-01-01",
-  "profil": "/chemin/du/profil/playwright",
-  "reinjecter": "/chemin/du/script/de/depot",
+  "profil": "/path/to/chrome/profile",
+  "reinjecter": "/path/to/deposit/script",
   "libelles_non_fiables": []
 }
