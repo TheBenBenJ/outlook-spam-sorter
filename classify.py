@@ -1,7 +1,7 @@
 #!/opt/homebrew/bin/python3 -I
 """Avis de Haiku, sans aucun outil, sur des lignes de la liste d'Outlook : lit [{"n", "from", "objet"}] sur l'entrée standard, écrit {n: {"verdict", "confiance"}}.
 
-Le texte des mails est hostile : il ne peut que faire choisir un mauvais verdict dans une liste fermée, jamais agir. passage.mjs ne supprime rien sans un verdict sûr, et ne récupère que des expéditeurs déjà connus.
+Le texte des mails est hostile : il ne peut que faire choisir un mauvais verdict dans une liste fermée, jamais agir. daily-pass.mjs ne supprime rien sans un verdict sûr, et ne récupère que des expéditeurs déjà connus.
 """
 import json, os, re, shutil, subprocess, sys, tempfile
 

@@ -2,14 +2,14 @@
 // Passage quotidien sur Outlook.com, sans agent ni fenêtre : ce que fait ce script ne dépend pas de ce que disent les mails, qui sont hostiles. Rien n'est envoyé, aucun lien n'est ouvert.
 // Dossier indésirable : les expéditeurs connus repartent en boîte, le spam sûr va dans Éléments supprimés, le reste attend une séance interactive.
 // Boîte de réception : l'original des mails coincés est déposé dans Gmail puis archivé, ce qui y est déjà part aux archives, les expéditeurs récupérés entrent sur la liste blanche.
-// passage.mjs [essai]     essai : classe et affiche, sans rien supprimer, déplacer, déposer ni consigner. Une seule fenêtre à la fois sur ce profil.
+// daily-pass.mjs [essai]     essai : classe et affiche, sans rien supprimer, déplacer, déposer ni consigner. Une seule fenêtre à la fois sur ce profil.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
-const ICI = path.dirname(fileURLToPath(import.meta.url)), TRAVAIL = path.join(ICI, 'travail'), EML = path.join(TRAVAIL, 'eml');
+const ICI = path.dirname(fileURLToPath(import.meta.url)), TRAVAIL = path.join(ICI, 'work'), EML = path.join(TRAVAIL, 'eml');
 const ESSAI = process.argv.includes('essai');
 const OUTLOOK = 'https://outlook.live.com/mail/0/';
 const CONFIANCE_SPAM = 0.8, DUREE_MAX = 30 * 60 * 1000;
@@ -26,14 +26,14 @@ function script(nom, args = [], input) {
 
 function analyser(nom, releve, args) {
   fs.writeFileSync(path.join(TRAVAIL, nom), JSON.stringify(releve));
-  return JSON.parse(script('analyser.py', [...args, nom]));
+  return JSON.parse(script('analyze.py', [...args, nom]));
 }
 
 // Lignes de la liste -> verdict de Haiku. Sans avis, rien ne bouge : la ligne attend le passage suivant.
 function juger(lignes) {
   if (!lignes.length) return () => ({});
   try {
-    const avis = JSON.parse(script('classer.py', [], JSON.stringify(lignes.map((l, n) => ({ n, from: l.from, objet: l.objet })))));
+    const avis = JSON.parse(script('classify.py', [], JSON.stringify(lignes.map((l, n) => ({ n, from: l.from, objet: l.objet })))));
     return l => avis[lignes.indexOf(l)] || {};
   } catch (e) {
     log('avis de Haiku indisponible :', e.message);
@@ -258,7 +258,7 @@ async function listeBlanche(page, adresses) {
 }
 
 function echec(motif) {
-  if (!ESSAI) script('consigner.py', ['--echec', motif]);
+  if (!ESSAI) script('record.py', ['--echec', motif]);
   console.log(`RÉSUMÉ : ${motif}`);
 }
 
@@ -285,7 +285,7 @@ try {
     const familles = {};
     ind.nouveauxSpams.forEach(l => { const d = l.from.split('@').pop(); familles[d] = (familles[d] || 0) + 1; });
     const spam = Object.keys(familles).filter(d => familles[d] >= 3);
-    script('consigner.py', ['--examines', ind.examines + bo.examines, '--remis', ind.remis.length, '--supprimes', ind.supprimes, '--a-verifier', aVerifier,
+    script('record.py', ['--examines', ind.examines + bo.examines, '--remis', ind.remis.length, '--supprimes', ind.supprimes, '--a-verifier', aVerifier,
       '--recuperes', bo.deposes, '--archives', bo.archives, '--restants', bo.restants, '--spam', ...spam, '--legitimes', ...ind.remis, '--approuves', ...approuves].map(String));
   }
   console.log(`RÉSUMÉ : ${ESSAI ? 'essai, rien de changé. ' : ''}${ind.remis.length} remis en boîte, ${ind.supprimes} spams supprimés, ${bo.deposes} déposés dans Gmail, ${bo.archives} archivés, ${aVerifier} à vérifier.`);

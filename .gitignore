@@ -1,7 +1,7 @@
 expediteurs.json
 etat-outlook.json
 approuves.json
-travail/
+work/
 *.tmp
 .DS_Store
 node_modules/

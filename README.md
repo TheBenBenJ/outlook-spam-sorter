@@ -6,8 +6,8 @@ Un script qui vide chaque jour le dossier indésirable d'Outlook.com et récupè
 
 ## Garanties
 
-- `passage.mjs` est un script : ce qu'il fait ne dépend pas de ce que disent les mails. Il n'ouvre aucun lien et n'envoie rien.
-- `classer.py` est le seul appel à une IA : Haiku, sans aucun outil, ne voit que l'adresse de l'expéditeur et la ligne de la liste, et répond dans une liste fermée. Un mail piégé peut au pire laisser un mail en place, ou faire supprimer le mail d'un expéditeur inconnu, qui reste 30 jours dans Éléments supprimés.
+- `daily-pass.mjs` est un script : ce qu'il fait ne dépend pas de ce que disent les mails. Il n'ouvre aucun lien et n'envoie rien.
+- `classify.py` est le seul appel à une IA : Haiku, sans aucun outil, ne voit que l'adresse de l'expéditeur et la ligne de la liste, et répond dans une liste fermée. Un mail piégé peut au pire laisser un mail en place, ou faire supprimer le mail d'un expéditeur inconnu, qui reste 30 jours dans Éléments supprimés.
 - Un expéditeur déjà connu n'est jamais supprimé. Seul un expéditeur déjà connu revient en boîte ou entre sur la liste blanche.
 - La récupération passe par le téléchargement de l'original en .eml, déposé dans Gmail par un script à fournir (`reinjecter` dans les réglages), qui ne doit accepter qu'un expéditeur déjà connu et authentifié.
 - Si Outlook propose une suppression définitive, le script annule et s'arrête.
@@ -19,8 +19,8 @@ Un script qui vide chaque jour le dossier indésirable d'Outlook.com et récupè
 ```sh
 git clone https://github.com/TheBenBenJ/tri-spam-outlook ~/.local/share/tri-spam-outlook && cd ~/.local/share/tri-spam-outlook
 npm ci
-cp expediteurs.exemple.json expediteurs.json   # expéditeurs légitimes, profil du navigateur, script de dépôt
-mkdir travail
+cp expediteurs.example.json expediteurs.json   # expéditeurs légitimes, profil du navigateur, script de dépôt
+mkdir work
 ln -s "$PWD/skill" ~/.claude/skills/tri-spam-outlook
 ```
 

@@ -1,17 +1,17 @@
 #!/opt/homebrew/bin/python3 -I
-"""Analyse les relevés d'Outlook, pour passage.mjs ou une séance interactive.
+"""Analyse les relevés d'Outlook, pour daily-pass.mjs ou une séance interactive.
 
-analyser.py [--lignes] <relevé.json>   dossier indésirable : groupes par domaine et par classe ; --lignes y ajoute les lignes de chaque classe
-analyser.py boite <relevé.json>        boîte de réception : quoi récupérer dans Gmail, quoi archiver, qui ajouter à la liste blanche
+analyze.py [--lignes] <relevé.json>   dossier indésirable : groupes par domaine et par classe ; --lignes y ajoute les lignes de chaque classe
+analyze.py boite <relevé.json>        boîte de réception : quoi récupérer dans Gmail, quoi archiver, qui ajouter à la liste blanche
 
-Relevés : liste de {"id", "from", "l"}, dans le dossier travail/ uniquement.
+Relevés : liste de {"id", "from", "l"}, dans le dossier work/ uniquement.
 """
 import datetime, json, re, sys, unicodedata
 from collections import defaultdict
 from pathlib import Path
 
 ICI = Path(__file__).resolve().parent
-TRAVAIL = (ICI / "travail").resolve()
+TRAVAIL = (ICI / "work").resolve()
 MAX_RECUPERATIONS, MAX_ARCHIVES = 100, 300  # par passage, pour en borner la durée : le reste attend le passage suivant
 RECENT_JOURS = 90  # un inconnu plus ancien part aux archives sans récupération : il n'a plus rien d'urgent
 JETABLE = re.compile(r"\+|[0-9a-f]{8}-[0-9a-f]{4}|^thread-|^[^@]{25,}@")  # adresse propre à un ticket ou à une commande : inutile sur la liste blanche
@@ -22,7 +22,7 @@ avec_lignes = "--lignes" in args
 if avec_lignes:
     args.remove("--lignes")
 if len(args) != 1 or (TRAVAIL / args[0]).resolve().parent != TRAVAIL:
-    sys.exit("usage : analyser.py [boite | --lignes] <fichier du dossier travail/>")
+    sys.exit("usage : analyze.py [boite | --lignes] <fichier du dossier work/>")
 memoire = json.loads((ICI / "expediteurs.json").read_text())
 legitimes = {k.lower() for k in memoire["legitimes"]}
 spam = {k.lower() for k in memoire["spam_confirme_domaines"]}

@@ -1,5 +1,5 @@
 {
-  "_doc": "Mémoire du tri du courrier indésirable. Lu et mis à jour par passage.mjs et ses scripts. Adresses ou domaines en minuscules.",
+  "_doc": "Mémoire du tri du courrier indésirable. Lu et mis à jour par daily-pass.mjs et ses scripts. Adresses ou domaines en minuscules.",
   "legitimes": {
     "notifications@example.com": "Exemple de service"
   },

@@ -2,8 +2,8 @@
 """Consigne un passage de tri-spam-outlook dans expediteurs.json, approuves.json et etat-outlook.json.
 
 Seules entrent dans `legitimes` les adresses déjà reçues dans Gmail, et jamais une messagerie grand public dans les domaines de spam : une ligne de spam n'y bannit pas tous ses utilisateurs.
-consigner.py --examines N --remis N --supprimes N --a-verifier N [--recuperes N --archives N --restants N] [--spam domaine ...] [--legitimes adresse ...] [--approuves adresse ...]
-consigner.py --echec "motif"
+record.py --examines N --remis N --supprimes N --a-verifier N [--recuperes N --archives N --restants N] [--spam domaine ...] [--legitimes adresse ...] [--approuves adresse ...]
+record.py --echec "motif"
 """
 import argparse, datetime, json, os, re
 from pathlib import Path
