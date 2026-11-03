@@ -36,6 +36,7 @@ launchd (daily) ─► lancer.sh ─► daily-pass.mjs  (headless Chrome, persis
 | `expediteurs.json` | Settings and memory (git-ignored). Start from `expediteurs.example.json`. |
 | `approuves.json` | Copy of Outlook's safe senders list (git-ignored). |
 | `etat-outlook.json` | State of the last run, for a dashboard or another service (git-ignored). |
+| `.github/workflows/ci.yml` | Syntax checks on GitHub (Python, Node, zsh, JSON) for every push; no secret, no deployment. |
 
 ## Requirements
 
