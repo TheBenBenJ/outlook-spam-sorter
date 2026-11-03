@@ -4,7 +4,8 @@
 analyze.py [--lines] <snapshot.json>   junk folder: groups by domain and class; --lines adds the rows of each class
 analyze.py inbox <snapshot.json>       inbox: what to recover into Gmail, what to archive, whom to add to the safe senders list
 
-Snapshots: a list of {"id", "from", "l"} ("l" is the row's aria-label), read from the work/ folder only.
+Snapshots: a list of {"id", "from", "l"} ("l" is the row's aria-label, or sender name and subject from IMAP) and, from imap-pass.py,
+"date" (YYYY-MM-DD, the received date), read from the work/ folder only.
 Output keys and class names (legitime, connu_gmail, spam_connu, a_classer, recuperer, archiver, a_verifier...) stay French on
 purpose: they are the vocabulary of senders.json and outlook-state.json, which other components read (see the README).
 """
@@ -129,7 +130,7 @@ def analyze_inbox():
     for m in snapshot:
         address = str(m.get("from") or "").strip().lower()
         row_text = str(m.get("l") or "")
-        d = row_date(row_text)
+        d = datetime.date.fromisoformat(m["date"]) if m.get("date") else row_date(row_text)  # imap-pass.py gives the received date; the browser pass reads it in the row
         day = d.isoformat() if d else "0000-00-00"  # unreadable date: treated as old, the mail stays in the archive
         text = flatten(row_text)
         window = {(d + datetime.timedelta(days=k)).isoformat() for k in (-1, 0, 1)} if d else set()

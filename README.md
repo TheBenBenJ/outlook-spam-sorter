@@ -6,7 +6,7 @@ A daily, unattended pass over an Outlook.com (Hotmail) mailbox that forwards to 
 - it recovers the mails **stuck in the inbox** (Outlook did not forward them) by depositing their original `.eml` into Gmail, then archives them;
 - it adds the recovered senders to Outlook's **safe senders list**.
 
-No AI drives the browser and no window opens: a script runs a headless Chrome. Every email is treated as hostile. A Claude Code skill (`skill/`) covers what still needs a person: doubtful mails, unsubscribing, signing in again, repairing the script when Outlook's UI changes.
+No AI drives the browser and no window opens: a script runs a headless Chrome. Every email is treated as hostile. A second version of the same pass, `imap-pass.py`, does it over IMAP with OAuth instead of a browser, so it can run on a server (see "The IMAP pass"). A Claude Code skill (`skill/`) covers what still needs a person: doubtful mails, unsubscribing, signing in again, repairing the script when Outlook's UI changes.
 
 Formerly `tri-spam-outlook`: the project was renamed on 3 November 2026, along with its script and data file names (see "Design decisions").
 
@@ -31,6 +31,9 @@ launchd (daily) ─► run.sh ─► daily-pass.mjs  (headless Chrome, persisten
 |---|---|
 | `run.sh` | Entry point for launchd. Runs the pass, appends its report to `~/Library/Logs/outlook-spam-sorter.log`, sends the notification, empties `work/`. `run.sh trial` is a dry run. |
 | `daily-pass.mjs` | The pass itself (Playwright, headless Chrome). Opens no link, sends nothing. |
+| `imap-pass.py` | The same pass over IMAP (XOAUTH2), with no browser. `imap-pass.py trial` is a dry run. |
+| `outlook_imap.py` | OAuth grant (`authorize <client-id>`, device code), token refresh, IMAP connection and folders (`check`). |
+| `tests.py` | Offline checks of the IMAP pass: fake IMAP server, fake `claude`, fake deposit script. |
 | `analyze.py` | Reads a list snapshot and the settings, writes nothing: which class each row belongs to, what to recover, archive or approve. |
 | `classify.py` | The only AI call: Haiku through `claude -p`, with no tools, returns a verdict from a closed list for each row. |
 | `record.py` | Writes the outcome of a run into the three JSON files below. |
@@ -39,6 +42,18 @@ launchd (daily) ─► run.sh ─► daily-pass.mjs  (headless Chrome, persisten
 | `approved.json` | Copy of Outlook's safe senders list (git-ignored). |
 | `outlook-state.json` | State of the last run, for a dashboard or another service (git-ignored). |
 | `.github/workflows/ci.yml` | Syntax checks on GitHub (Python, Node, zsh, JSON) for every push; no secret, no deployment. |
+
+## The IMAP pass
+
+`imap-pass.py` runs the same steps with the same helpers (`analyze.py`, `classify.py`, `record.py`) and the same files, over IMAP:
+
+- **Authorization**: an app registration in Microsoft Entra (an Azure directory is required since June 2024, even for a personal account), with "Accounts in any organizational directory and personal Microsoft accounts" and public client flows allowed, so there is no client secret. `outlook_imap.py authorize <client-id>` prints a code to enter at microsoft.com/link from any device; the refresh token goes to `$OUTLOOK_SORTER_TOKEN` (default `~/.config/outlook-spam-sorter/token.json`, mode 600). Microsoft renews it at each use; unused for 90 days, it expires and the pass fails with "Session Outlook expirée".
+- **Junk folder**: rows come from the headers (`From`, `Subject`, received date). Restoring is a move to the inbox, deleting a move to Deleted Items; the script never sets a deletion flag nor expunges.
+- **Inbox**: the original `.eml` is fetched by IMAP (`BODY.PEEK[]`, the mail stays unread), handed to `reinjecter` (a path, or a command as a list), then the mail moves to the archive folder.
+- **Not done**: adding recovered senders to Outlook's safe senders list. Neither IMAP nor Microsoft Graph exposes that list for a personal account.
+- **Notification**: `$OUTLOOK_SORTER_NOTIFY`, if set, is called as `<command> "Tri mails Outlook" "<text>"` when the run fails or the number of mails to review goes up. The text carries counts or a fixed reason, never an address or a subject.
+
+Checks: `python3 -I tests.py` (offline, writes only to a temporary folder).
 
 ## Requirements
 
@@ -138,7 +153,8 @@ Troubleshooting (the reasons below appear in the notification and in `outlook-st
 - **Clicks through JavaScript, on exact labels.** An Outlook overlay sometimes intercepts simulated clicks. Outlook's dialogs are fixed-position, so visibility is tested with `getClientRects()`, not `offsetParent`.
 - **Bounded runs.** Rows are ticked in batches of 25 and the batch is dropped if anything else is selected; a run recovers at most 100 mails and archives at most 300; a 30-minute watchdog stops it. The rest waits for the next day.
 - **Notify only when something changed.** A notification appears when a run fails or the number of mails to review goes up; otherwise the state file (shown on a dashboard) is enough.
-- **Microsoft Graph was considered and set aside.** It would replace the browser with an API (`$value` for the original `.eml`, `move`, `Mail.ReadWrite`), but a personal account needs an app registration in an Azure directory, `mailboxSettings` does not expose the safe senders list, and `markAsNotJunk` is deprecated. The browser script stays until that changes.
+- **Microsoft Graph was considered and set aside.** It would replace the browser with an API (`$value` for the original `.eml`, `move`, `Mail.ReadWrite`), but a personal account needs an app registration in an Azure directory, `mailboxSettings` does not expose the safe senders list, and `markAsNotJunk` is deprecated (its successor, `reportMessage`, is beta only).
+- **IMAP with OAuth, November 2026.** Tried on the real mailbox on 3 November 2026: with an app registration in an Azure directory, a personal account grants `IMAP.AccessAsUser.All` by device code, and IMAP reads the folders, fetches the original `.eml` and moves mails (`MOVE`). It drops the browser, the Chrome profile, Node and the UI selectors, and runs on a server. The price is an Azure directory, and the safe senders list, which nothing but the web UI can change. `imap-pass.py` is that pass; the browser pass stays until the switch.
 - **Real Chrome with a persistent profile.** `playwright-core` (pinned, no bundled browser) drives the installed Chrome headless, so the Outlook session survives between runs and the interactive skill can reuse the same profile (one browser at a time).
 - **What stays in French, and why.** Code, comments, logs and docs are in English, and so are the names of the scripts and data files. French stays where it is an interface: Outlook's French button labels (selectors), the notification and failure texts (read by a person; a dashboard matches "Session Outlook"), the Haiku prompt and its verdict values (rewording would change the verdicts), the JSON keys and class names shared with other components (`legitimes`, `a_verifier`, `recuperer`...), the reinjection statuses, and the skill, whose trigger phrases must match French requests.
 - **Renamed on 3 November 2026.** The project was `tri-spam-outlook`; its folder, launchd label, log and skill now use `outlook-spam-sorter`. `lancer.sh` became `run.sh` and its dry-run argument `essai` became `trial`; any other argument is refused, so the old word cannot start a real pass. The data files became `senders.json` (formerly `expediteurs.json`), `approved.json` (`approuves.json`) and `outlook-state.json` (`etat-outlook.json`), with the same keys and values: the programs that read them and the launchd job switched at the same time. `.gitignore` still lists the old names, so a copy from before is never committed.
