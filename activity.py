@@ -5,12 +5,13 @@ Convention of the home server (home-server docs/architecture.md, System tab): {"
 French (Benjamin reads them) and may hold subjects and addresses: the file stays private (mode 600) and never feeds a notification.
 Above 5 MB the file is rewritten (a temporary file in the same folder, then a rename) with the events of the last 90 days, 20,000 lines
 at most. Writing never raises: a journal that cannot be written must not stop the pass.
-Path: $OUTLOOK_SORTER_ACTIVITY, by default activity.jsonl next to the pass's state (senders.json, outlook-state.json).
+Path: $OUTLOOK_SORTER_ACTIVITY, by default activity.jsonl next to the pass's state (senders.json, outlook-state.json): in $OUTLOOK_SORTER_DATA,
+by default this folder.
 """
 import datetime, json, os
 from pathlib import Path
 
-PATH = Path(os.environ.get("OUTLOOK_SORTER_ACTIVITY") or Path(__file__).resolve().parent / "activity.jsonl")
+PATH = Path(os.environ.get("OUTLOOK_SORTER_ACTIVITY") or Path(os.environ.get("OUTLOOK_SORTER_DATA") or Path(__file__).resolve().parent) / "activity.jsonl")
 MAX_BYTES, KEEP_DAYS, KEEP_LINES = 5_000_000, 90, 20_000
 LIMITS = {"object": 300, "from": 300, "to": 300, "detail": 1000}
 rotated = False   # once per run: 20,000 long lines may stay above 5 MB, and rewriting the file at every event would be wasteful

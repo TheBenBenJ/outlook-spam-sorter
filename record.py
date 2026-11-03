@@ -7,12 +7,13 @@ record.py --examined N --restored N --deleted N --to-review N [--recovered N --a
 record.py --failure "reason"
 Prints what it learned, for the activity journal: {"legitimate": [addresses added to legitimes], "spam": [domains added to the spam domains]}.
 Other components read these three files (mail sorting, the Dashboard, the relay to the home server): their keys and values stay as they are.
+They are in $OUTLOOK_SORTER_DATA, by default this folder.
 """
 import argparse, datetime, json, os, re
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-MEMORY, STATE = HERE / "senders.json", HERE / "outlook-state.json"
+DATA = Path(os.environ.get("OUTLOOK_SORTER_DATA") or Path(__file__).resolve().parent)
+MEMORY, STATE = DATA / "senders.json", DATA / "outlook-state.json"
 
 p = argparse.ArgumentParser()
 for name in ("--examined", "--restored", "--deleted", "--to-review", "--recovered", "--archived", "--remaining"):
@@ -42,7 +43,7 @@ try:
     known = json.loads(Path(mem["gmail_connus"]).read_text())
 except (KeyError, OSError, ValueError):
     known = {"adresses": {}, "domaines": {}}
-APPROVED = HERE / "approved.json"
+APPROVED = DATA / "approved.json"
 approved = set(json.loads(APPROVED.read_text())) if APPROVED.exists() else set()
 providers = set(known.get("fournisseurs") or [])
 learned = {"legitimate": [], "spam": []}

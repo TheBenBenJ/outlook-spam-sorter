@@ -10,12 +10,12 @@ Output keys and class names (legitime, connu_gmail, spam_connu, a_classer, recup
 purpose: they are the vocabulary of senders.json and outlook-state.json, which other components read (see the README).
 Each row carries a "motif": why it falls in its class or list, in French, for the activity journal that Benjamin reads.
 """
-import datetime, json, re, sys, unicodedata
+import datetime, json, os, re, sys, unicodedata
 from collections import defaultdict
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-WORK = (HERE / "work").resolve()
+DATA = Path(os.environ.get("OUTLOOK_SORTER_DATA") or Path(__file__).resolve().parent)   # senders.json, approved.json, work/
+WORK = (DATA / "work").resolve()
 MAX_RECOVERIES, MAX_ARCHIVES = 100, 300  # per run, to bound its duration: the rest waits for the next run
 RECENT_DAYS = 90  # an older unknown sender is archived without recovery: nothing urgent is left in it
 DISPOSABLE = re.compile(r"\+|[0-9a-f]{8}-[0-9a-f]{4}|^thread-|^[^@]{25,}@")  # address specific to one ticket or order: useless on the safe senders list
@@ -27,11 +27,11 @@ if with_lines:
     args.remove("--lines")
 if len(args) != 1 or (WORK / args[0]).resolve().parent != WORK:
     sys.exit("usage: analyze.py [inbox | --lines] <file in the work/ folder>")
-memory = json.loads((HERE / "senders.json").read_text())
+memory = json.loads((DATA / "senders.json").read_text())
 legitimate = {k.lower() for k in memory["legitimes"]}
 spam = {k.lower() for k in memory["spam_confirme_domaines"]}
 try:
-    approved = {k.lower() for k in json.loads((HERE / "approved.json").read_text())}  # safe senders list read from Outlook: kept apart, the agent does not need to read it
+    approved = {k.lower() for k in json.loads((DATA / "approved.json").read_text())}  # safe senders list read from Outlook: kept apart, the agent does not need to read it
 except (OSError, ValueError):
     approved = set()
 me = {k.lower() for k in memory.get("moi", [])}

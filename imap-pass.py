@@ -15,17 +15,19 @@ Activity journal (activity.py, for the Dashboard): one event per mail acted on, 
 and one at the end of each pass, in French (« remis en boîte », « spam supprimé », « à vérifier », « récupéré dans Gmail », « archivé »,
 « échec », « ajouté aux légitimes », « ajouté aux domaines spam », « passage terminé »). A mail left waiting is reported once, not at every
 pass (activity-waiting.json). A dry run writes no event.
+State (senders.json, approved.json, outlook-state.json, the journal, work/): $OUTLOOK_SORTER_DATA, by default this folder.
 """
 import datetime, email, email.header, email.utils, imaplib, json, os, re, signal, subprocess, sys, time
 from collections import Counter
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+DATA = Path(os.environ.get("OUTLOOK_SORTER_DATA") or HERE)   # the pass's state; the code stays in HERE
 sys.path.insert(0, str(HERE))
 import activity  # noqa: E402
 import outlook_imap  # noqa: E402
 
-WORK, EML = HERE / "work", HERE / "work" / "eml"
+WORK, EML = DATA / "work", DATA / "work" / "eml"
 SPAM_CONFIDENCE, MAX_DURATION, CHUNK = 0.8, 30 * 60, 200
 args = sys.argv[1:]
 if args not in ([], ["trial"]):
@@ -265,7 +267,7 @@ def inbox(m, names, script):
 
 def state():
     try:
-        return json.loads((HERE / "outlook-state.json").read_text())
+        return json.loads((DATA / "outlook-state.json").read_text())
     except (OSError, ValueError):
         return {}
 
@@ -314,7 +316,7 @@ def main():
     signal.signal(signal.SIGALRM, timeout)
     signal.alarm(MAX_DURATION)
     before = state().get("a_verifier", 0)
-    settings = json.loads((HERE / "senders.json").read_text())
+    settings = json.loads((DATA / "senders.json").read_text())
     try:
         reported.update(json.loads(WAITING.read_text()))
     except (OSError, ValueError, TypeError):

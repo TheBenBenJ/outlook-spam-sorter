@@ -212,6 +212,30 @@ with tempfile.TemporaryDirectory() as d:
     ok(oi.mutf7("Courrier ind&AOk-sirable") == "Courrier indésirable" and oi.mutf7("A&-B") == "A&B", "folder names decoded")
     ok(oi.folders(fake) == {"junk": "Junk", "trash": "Deleted", "archive": "Archivage"}, "folders found by flag, the archive by name")
 
+# The state in its own folder ($OUTLOOK_SORTER_DATA), the code in another, as on the home server: nothing is written next to the code
+CODE_FILES = ("activity.py", "analyze.py", "classify.py", "record.py", "imap-pass.py", "outlook_imap.py")
+with tempfile.TemporaryDirectory() as d:
+    code, data = Path(d) / "code", Path(d) / "data"
+    data.mkdir()
+    fake = setup(data)   # code and state together, as on the Mac, then the code moves out
+    code.mkdir()
+    for f in CODE_FILES:
+        (data / f).rename(code / f)
+    os.environ["OUTLOOK_SORTER_DATA"] = str(data)
+    for m in ("activity", "outlook_imap"):   # imported by the first pass from its own folder: import them again from this one
+        sys.modules.pop(m, None)
+    try:
+        ok(run(code, fake) == 0, "separate data folder: the pass ends well")
+        st = json.loads((data / "outlook-state.json").read_text())
+        mem = json.loads((data / "senders.json").read_text())
+        ok(st["recuperes"] == 2 and mem["historique"] and (data / "activity.jsonl").exists() and (data / "work" / "eml").is_dir(),
+           "separate data folder: state, history, journal and work/ written there")
+        ok(sorted(p.name for p in code.iterdir() if p.name != "__pycache__") == sorted(CODE_FILES), "separate data folder: nothing written next to the code")
+    finally:
+        del os.environ["OUTLOOK_SORTER_DATA"]
+        for m in ("activity", "outlook_imap"):
+            sys.modules.pop(m, None)
+
 # classify.py: the local model first, Haiku for what it did not answer, Haiku deciding in shadow mode (fake local server, fake claude)
 import http.server, threading  # noqa: E402
 with tempfile.TemporaryDirectory() as d:
@@ -282,6 +306,9 @@ with tempfile.TemporaryDirectory() as d:
     ok(act.PATH == tmp / "journal.jsonl", "activity: $OUTLOOK_SORTER_ACTIVITY sets the path")
     del os.environ["OUTLOOK_SORTER_ACTIVITY"]
     ok(load_activity(tmp).PATH == tmp.resolve() / "activity.jsonl", "activity: by default next to the pass's state")
+    os.environ["OUTLOOK_SORTER_DATA"] = str(tmp / "state")
+    ok(load_activity(tmp).PATH == tmp / "state" / "activity.jsonl", "activity: in $OUTLOOK_SORTER_DATA when the state is there")
+    del os.environ["OUTLOOK_SORTER_DATA"]
     act.log("spam supprimé", "x" * 400, **{"from": "Courrier indésirable", "to": ""}, detail="d" * 1200, engine=None, confidence=0.0, run="r")
     act.log("archivé", "a\u2028b")
     lines = act.PATH.read_text(encoding="utf-8").splitlines()
