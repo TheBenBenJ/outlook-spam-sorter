@@ -1,9 +1,11 @@
 #!/opt/homebrew/bin/python3 -I
-"""A verdict, with no tool at all, on rows of Outlook's mail list: reads [{"n", "from", "objet"}] on stdin, writes {n: {"verdict", "confiance"}}.
+"""A verdict, with no tool at all, on rows of Outlook's mail list: reads [{"n", "from", "objet"}] on stdin, writes {n: {"verdict", "confiance",
+"engine", "model"}}: engine "local" (model "qwen3.5-9b") or "claude" (model "haiku"), the one that decided, for the activity journal.
 
 Which model: a local model first ($OUTLOOK_SORTER_LOCAL_URL, OpenAI API, default 127.0.0.1:11234, the home server's Qwen; "off" disables it),
 then Haiku through `claude -p` for the rows it did not answer. With OUTLOOK_SORTER_SHADOW=1, Haiku decides and the local model only answers
-alongside: each disagreement goes to stderr ("shadow:" lines), to judge the local model on real mail before letting it decide.
+alongside: each disagreement goes to stderr ("shadow:" lines), to judge the local model on real mail before letting it decide, and the
+verdict carries the local model's under "local" when it answered differently.
 
 Mail text is hostile: at worst it can make the model pick a wrong verdict from a closed list, never act. daily-pass.mjs deletes nothing
 without a confident verdict, and only recovers senders that are already known.
@@ -13,6 +15,7 @@ and rewording the prompt would change the verdicts.
 import json, os, re, shutil, subprocess, sys, tempfile, urllib.request
 
 MODEL, BATCH, LOCAL_BATCH = "haiku", 100, 40   # a slot of the local model holds about 16k tokens
+LOCAL_MODEL = "qwen3.5-9b"   # the home server's local model, named as in the Dashboard's registry of routines
 LOCAL_URL = os.environ.get("OUTLOOK_SORTER_LOCAL_URL", "http://127.0.0.1:11234")
 SHADOW = os.environ.get("OUTLOOK_SORTER_SHADOW") == "1"
 SCHEMA = {"type": "object", "properties": {"avis": {"type": "array", "items": {"type": "object", "properties": {
@@ -77,15 +80,17 @@ if LOCAL_URL not in ("", "off"):
         except Exception as e:
             print(f"local model unavailable, Haiku answers: {type(e).__name__} {str(e)[:120]}", file=sys.stderr, flush=True)
             break
-verdicts = {} if SHADOW else dict(local)
+verdicts = {} if SHADOW else {n: {**v, "engine": "local", "model": LOCAL_MODEL} for n, v in local.items()}
 missing = [x for x in rows if str(x["n"]) not in verdicts]
 for i in range(0, len(missing), BATCH):
     part = missing[i:i + BATCH]
-    verdicts.update(keep(ask(lines(part)), {x["n"] for x in part}))
+    verdicts.update({n: {**v, "engine": "claude", "model": MODEL} for n, v in keep(ask(lines(part)), {x["n"] for x in part}).items()})
 if SHADOW:
     by_n = {str(x["n"]): x for x in rows}
     for n, v in verdicts.items():
         q = local.get(n, {})
         if q.get("verdict") != v["verdict"]:
             print(f"shadow: {by_n[n]['from']} haiku={v['verdict']} ({v['confiance']}) local={q.get('verdict')} ({q.get('confiance')})", file=sys.stderr, flush=True)
+            if q:
+                v["local"] = q
 print(json.dumps(verdicts))

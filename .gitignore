@@ -1,6 +1,9 @@
 senders.json
 outlook-state.json
 approved.json
+# the activity journal and the mails it already reported « à vérifier »: subjects and addresses
+activity.jsonl
+activity-waiting.json
 # the same personal files under their names before the rename of 3 November 2026: an old copy must never be committed
 expediteurs.json
 etat-outlook.json

@@ -8,6 +8,7 @@ Snapshots: a list of {"id", "from", "l"} ("l" is the row's aria-label, or sender
 "date" (YYYY-MM-DD, the received date), read from the work/ folder only.
 Output keys and class names (legitime, connu_gmail, spam_connu, a_classer, recuperer, archiver, a_verifier...) stay French on
 purpose: they are the vocabulary of senders.json and outlook-state.json, which other components read (see the README).
+Each row carries a "motif": why it falls in its class or list, in French, for the activity journal that Benjamin reads.
 """
 import datetime, json, re, sys, unicodedata
 from collections import defaultdict
@@ -52,11 +53,12 @@ def known_in_gmail(address, domain):
 
 
 def class_of(address, domain):
+    """-> (class, motif)."""
     if address in legitimate or domain in legitimate:
-        return "legitime"
+        return "legitime", "adresse reconnue comme légitime" if address in legitimate else "domaine reconnu comme légitime"
     if domain in spam:
-        return "spam_connu"
-    return "connu_gmail" if known_in_gmail(address, domain) else "a_classer"
+        return "spam_connu", "domaine connu pour le spam"
+    return ("connu_gmail", "expéditeur déjà reçu dans Gmail") if known_in_gmail(address, domain) else ("a_classer", "expéditeur inconnu")
 
 
 snapshot = json.loads((WORK / args[0]).read_text())
@@ -70,13 +72,13 @@ def analyze_junk():
     for m in snapshot:
         address = str(m.get("from") or "").strip().lower()
         domain = address.rpartition("@")[2] or "(sans adresse)"
-        c = class_of(address, domain)
+        c, why = class_of(address, domain)
         g = groups[(c, domain)]
         g["nombre"] += 1
         g["adresses"].add(address)
         if len(g["exemples"]) < 2:
             g["exemples"].append(str(m.get("l") or "")[:120])
-        rows[c].append({"id": m["id"], "from": address, "objet": str(m.get("l") or "")[:160]})
+        rows[c].append({"id": m["id"], "from": address, "objet": str(m.get("l") or "")[:160], "motif": why})
     output = {"total": len(snapshot), "groupes": [
         {"classe": c, "domaine": d, "nombre": g["nombre"], "adresses": sorted(g["adresses"])[:5], "exemples": g["exemples"]}
         for (c, d), g in sorted(groups.items(), key=lambda x: (x[0][0], -x[1]["nombre"]))]}
@@ -138,15 +140,24 @@ def analyze_inbox():
         label = gmail_label(address) or ""
         row = {"id": m["id"], "from": address, "date": day, "objet": row_text[:160]}
         domain = address.rpartition("@")[2]
-        trusted = address in legitimate or domain in legitimate or known_in_gmail(address, domain) or bool(label and not label.startswith(unreliable))
-        if address in me or already_in_gmail or day < since or (noise and label.startswith(noise)):
-            archive.append(row)
+        trust = ("adresse reconnue comme légitime" if address in legitimate else "domaine reconnu comme légitime" if domain in legitimate
+                 else "expéditeur déjà reçu dans Gmail" if known_in_gmail(address, domain)
+                 else f"expéditeur rangé dans Gmail sous « {label} »" if label and not label.startswith(unreliable) else None)
+        if address in me:
+            to, row["motif"] = archive, "envoyé depuis une de mes adresses"
+        elif already_in_gmail:
+            to, row["motif"] = archive, "déjà dans Gmail"
+        elif day < since:
+            to, row["motif"] = archive, f"reçu avant le {since}" if d else "date de réception illisible"
+        elif noise and label.startswith(noise):
+            to, row["motif"] = archive, f"bruit, rangé dans Gmail sous « {label} »"
         elif domain in spam:
-            review.append(row)
-        elif not trusted:  # the inbox also holds phishing that got through the filters: never recover nor approve an unknown sender
-            (review if day >= recent_since else archive).append(row)
+            to, row["motif"] = review, "domaine connu pour le spam"
+        elif not trust:  # the inbox also holds phishing that got through the filters: never recover nor approve an unknown sender
+            to, row["motif"] = (review, "expéditeur inconnu") if day >= recent_since else (archive, f"expéditeur inconnu, mail de plus de {RECENT_DAYS} jours")
         else:
-            recover.append(row)
+            to, row["motif"] = recover, trust
+        to.append(row)
     recover.sort(key=lambda x: x["date"], reverse=True)
     archive.sort(key=lambda x: x["date"], reverse=True)
     batch = recover[:MAX_RECOVERIES]

@@ -4,7 +4,8 @@ A daily, unattended pass over an Outlook.com (Hotmail) mailbox that forwards to 
 
 - it cleans the **junk folder**: known senders go back to the inbox, sure spam is deleted, the rest waits for a human;
 - it recovers the mails **stuck in the inbox** (Outlook did not forward them) by depositing their original `.eml` into Gmail, then archives them;
-- it adds the recovered senders to Outlook's **safe senders list**.
+- it adds the recovered senders to Outlook's **safe senders list**;
+- it keeps an **activity journal** of what it did, mail by mail, for a dashboard (IMAP pass, see "The IMAP pass").
 
 No AI drives the browser and no window opens: a script runs a headless Chrome. Every email is treated as hostile. A second version of the same pass, `imap-pass.py`, does it over IMAP with OAuth instead of a browser, so it can run on a server (see "The IMAP pass"). A Claude Code skill (`skill/`) covers what still needs a person: doubtful mails, unsubscribing, signing in again, repairing the script when Outlook's UI changes.
 
@@ -35,12 +36,14 @@ launchd (daily) ─► run.sh ─► daily-pass.mjs  (headless Chrome, persisten
 | `outlook_imap.py` | OAuth grant (`authorize <client-id>`, device code), token refresh, IMAP connection and folders (`check`). |
 | `tests.py` | Offline checks of the IMAP pass: fake IMAP server, fake `claude`, fake deposit script. |
 | `analyze.py` | Reads a list snapshot and the settings, writes nothing: which class each row belongs to, what to recover, archive or approve. |
-| `classify.py` | The only AI call, with no tools: a verdict from a closed list for each row, from a local model when one answers (`$OUTLOOK_SORTER_LOCAL_URL`, OpenAI API, default `127.0.0.1:11234`), else Haiku through `claude -p`. `OUTLOOK_SORTER_SHADOW=1`: Haiku decides and each disagreement with the local model is logged. |
-| `record.py` | Writes the outcome of a run into the three JSON files below. |
+| `classify.py` | The only AI call, with no tools: a verdict from a closed list for each row, from a local model when one answers (`$OUTLOOK_SORTER_LOCAL_URL`, OpenAI API, default `127.0.0.1:11234`), else Haiku through `claude -p`. Each verdict names the model that gave it. `OUTLOOK_SORTER_SHADOW=1`: Haiku decides and each disagreement with the local model is logged. |
+| `record.py` | Writes the outcome of a run into the three JSON files below, and prints the senders and spam domains it learned. |
+| `activity.py` | Writer of the activity journal (see "The IMAP pass"): appends one JSON event per line, rotates the file above 5 MB. |
 | `skill/` | Claude Code skill for interactive sessions (in French, like its trigger phrases). |
 | `senders.json` | Settings and memory (git-ignored). Start from `senders.example.json`. |
 | `approved.json` | Copy of Outlook's safe senders list (git-ignored). |
 | `outlook-state.json` | State of the last run, for a dashboard or another service (git-ignored). |
+| `activity.jsonl` | Activity journal of the IMAP pass, for a dashboard (git-ignored), with `activity-waiting.json`, the mails it already reported as waiting. |
 | `.github/workflows/ci.yml` | Syntax checks on GitHub (Python, Node, zsh, JSON) for every push; no secret, no deployment. |
 
 ## The IMAP pass
@@ -52,6 +55,7 @@ launchd (daily) ─► run.sh ─► daily-pass.mjs  (headless Chrome, persisten
 - **Inbox**: the original `.eml` is fetched by IMAP (`BODY.PEEK[]`, the mail stays unread), handed to `reinjecter` (a path, or a command as a list), then the mail moves to the archive folder.
 - **Not done**: adding recovered senders to Outlook's safe senders list. Neither IMAP nor Microsoft Graph exposes that list for a personal account, and Graph's `reportMessage` with `notJunk` (beta) moves the mail back to the inbox without adding its sender (tried on 3 November 2026). Only the web UI's "Courrier légitime" does. The senders already approved stay approved, and a known sender that lands in junk is still moved back by the next run.
 - **Notification**: `$OUTLOOK_SORTER_NOTIFY`, if set, is called as `<command> "Tri mails Outlook" "<text>"` when the run fails or the number of mails to review goes up. The text carries counts or a fixed reason, never an address or a subject.
+- **Activity journal**: `activity.jsonl` (`$OUTLOOK_SORTER_ACTIVITY`, by default next to `senders.json`), the home server's convention for the Dashboard's routines (home-server `docs/architecture.md`): one JSON event per line, `{"time", "action", "object", "from", "to", "detail", "engine", "model", "confidence", "run"}`, empty fields left out, texts in French because the owner reads them. One event per mail acted on: `remis en boîte`, `spam supprimé`, `à vérifier`, `récupéré dans Gmail`, `archivé`; per failure, `échec` (of the pass, of the models, or of one mail's deposit); per sender or domain learned, `ajouté aux légitimes`, `ajouté aux domaines spam`; and `passage terminé` with the run's counts. The object is the mail's subject, the detail the sender and why (`analyze.py`'s `motif`, the model's verdict and, during the shadow week, the local model's when it disagreed); `engine`, `model` and `confidence` say which model decided, when one did. A mail left waiting is reported once per verdict, not at every hourly run (`activity-waiting.json`). The file holds subjects and addresses: mode 600, never in a notification. Above 5 MB it is rewritten with the last 90 days, 20,000 lines at most. Writing never fails a run, and a dry run writes nothing.
 
 Checks: `python3 -I tests.py` (offline, writes only to a temporary folder).
 
@@ -140,7 +144,7 @@ Troubleshooting (the reasons below appear in the notification and in `outlook-st
 - Haiku sees only the sender address and the list row, has no tools, and answers from a closed list. A crafted mail can at worst leave a mail in place, or get the mail of an unknown sender deleted, which stays 30 days in Deleted Items. A known sender is never deleted.
 - Only an already known sender is recovered into Gmail or added to the safe senders list: the inbox also holds phishing that got through Outlook's filters.
 - The Chrome profile holds a signed-in session that can delete mail: keep it private, and never sign another account (Google, for example) into it.
-- Downloaded `.eml` files go to `work/eml` (mode 700), which `run.sh` empties after every run. The JSON files hold addresses and are git-ignored.
+- Downloaded `.eml` files go to `work/eml` (mode 700), which `run.sh` empties after every run. The JSON files hold addresses and are git-ignored, like the activity journal, which also holds subjects.
 - The Python helpers run with `python3 -I` (isolated mode): no `PYTHON*` variables, no user site-packages, no imports from the current directory.
 
 ## Design decisions
