@@ -1,156 +1,158 @@
 #!/opt/homebrew/bin/python3 -I
-"""Analyse les relevés d'Outlook, pour daily-pass.mjs ou une séance interactive.
+"""Analyse snapshots of Outlook's mail list, for daily-pass.mjs or an interactive session.
 
-analyze.py [--lignes] <relevé.json>   dossier indésirable : groupes par domaine et par classe ; --lignes y ajoute les lignes de chaque classe
-analyze.py boite <relevé.json>        boîte de réception : quoi récupérer dans Gmail, quoi archiver, qui ajouter à la liste blanche
+analyze.py [--lines] <snapshot.json>   junk folder: groups by domain and class; --lines adds the rows of each class
+analyze.py inbox <snapshot.json>       inbox: what to recover into Gmail, what to archive, whom to add to the safe senders list
 
-Relevés : liste de {"id", "from", "l"}, dans le dossier work/ uniquement.
+Snapshots: a list of {"id", "from", "l"} ("l" is the row's aria-label), read from the work/ folder only.
+Output keys and class names (legitime, connu_gmail, spam_connu, a_classer, recuperer, archiver, a_verifier...) stay French on
+purpose: they are the vocabulary of expediteurs.json and etat-outlook.json, which other components read (see the README).
 """
 import datetime, json, re, sys, unicodedata
 from collections import defaultdict
 from pathlib import Path
 
-ICI = Path(__file__).resolve().parent
-TRAVAIL = (ICI / "work").resolve()
-MAX_RECUPERATIONS, MAX_ARCHIVES = 100, 300  # par passage, pour en borner la durée : le reste attend le passage suivant
-RECENT_JOURS = 90  # un inconnu plus ancien part aux archives sans récupération : il n'a plus rien d'urgent
-JETABLE = re.compile(r"\+|[0-9a-f]{8}-[0-9a-f]{4}|^thread-|^[^@]{25,}@")  # adresse propre à un ticket ou à une commande : inutile sur la liste blanche
+HERE = Path(__file__).resolve().parent
+WORK = (HERE / "work").resolve()
+MAX_RECOVERIES, MAX_ARCHIVES = 100, 300  # per run, to bound its duration: the rest waits for the next run
+RECENT_DAYS = 90  # an older unknown sender is archived without recovery: nothing urgent is left in it
+DISPOSABLE = re.compile(r"\+|[0-9a-f]{8}-[0-9a-f]{4}|^thread-|^[^@]{25,}@")  # address specific to one ticket or order: useless on the safe senders list
 
 args = sys.argv[1:]
-mode = args.pop(0) if args and args[0] == "boite" else "indesirable"
-avec_lignes = "--lignes" in args
-if avec_lignes:
-    args.remove("--lignes")
-if len(args) != 1 or (TRAVAIL / args[0]).resolve().parent != TRAVAIL:
-    sys.exit("usage : analyze.py [boite | --lignes] <fichier du dossier work/>")
-memoire = json.loads((ICI / "expediteurs.json").read_text())
-legitimes = {k.lower() for k in memoire["legitimes"]}
-spam = {k.lower() for k in memoire["spam_confirme_domaines"]}
+mode = args.pop(0) if args and args[0] == "inbox" else "junk"
+with_lines = "--lines" in args
+if with_lines:
+    args.remove("--lines")
+if len(args) != 1 or (WORK / args[0]).resolve().parent != WORK:
+    sys.exit("usage: analyze.py [inbox | --lines] <file in the work/ folder>")
+memory = json.loads((HERE / "expediteurs.json").read_text())
+legitimate = {k.lower() for k in memory["legitimes"]}
+spam = {k.lower() for k in memory["spam_confirme_domaines"]}
 try:
-    approuves = {k.lower() for k in json.loads((ICI / "approuves.json").read_text())}  # liste blanche relevée dans Outlook : à part, l'agent n'a pas à la lire
+    approved = {k.lower() for k in json.loads((HERE / "approuves.json").read_text())}  # safe senders list read from Outlook: kept apart, the agent does not need to read it
 except (OSError, ValueError):
-    approuves = set()
-moi = {k.lower() for k in memoire.get("moi", [])}
-depuis = memoire.get("recuperer_depuis", "2000-01-01")
-bruit = tuple(memoire.get("libelles_bruit", []))
-non_fiables = tuple(memoire.get("libelles_non_fiables", []))
+    approved = set()
+me = {k.lower() for k in memory.get("moi", [])}
+since = memory.get("recuperer_depuis", "2000-01-01")
+noise = tuple(memory.get("libelles_bruit", []))
+unreliable = tuple(memory.get("libelles_non_fiables", []))
 try:
-    connus = json.loads(Path(memoire["gmail_connus"]).read_text())
+    known = json.loads(Path(memory["gmail_connus"]).read_text())
 except (KeyError, OSError, ValueError):
-    connus = {"adresses": {}, "domaines": {}, "libelles": {}, "exacts": {}, "recents": []}
+    known = {"adresses": {}, "domaines": {}, "libelles": {}, "exacts": {}, "recents": []}
 
 
-def connu_gmail(adresse, domaine):
-    """Déjà reçu dans Gmail : l'adresse exacte, ou un domaine d'entreprise vu au moins cinq fois. Sans liste des messageries grand public, le domaine ne prouve rien."""
-    if adresse in connus["adresses"]:
+def known_in_gmail(address, domain):
+    """Already received in Gmail: the exact address, or a company domain seen at least five times. Without the list of consumer mail providers, a domain proves nothing."""
+    if address in known["adresses"]:
         return True
-    fournisseurs = connus.get("fournisseurs") or []
-    return bool(fournisseurs) and domaine not in fournisseurs and connus["domaines"].get(domaine, 0) >= 5
+    providers = known.get("fournisseurs") or []
+    return bool(providers) and domain not in providers and known["domaines"].get(domain, 0) >= 5
 
 
-def classe(adresse, domaine):
-    if adresse in legitimes or domaine in legitimes:
+def class_of(address, domain):
+    if address in legitimate or domain in legitimate:
         return "legitime"
-    if domaine in spam:
+    if domain in spam:
         return "spam_connu"
-    return "connu_gmail" if connu_gmail(adresse, domaine) else "a_classer"
+    return "connu_gmail" if known_in_gmail(address, domain) else "a_classer"
 
 
-releve = json.loads((TRAVAIL / args[0]).read_text())
-if isinstance(releve, str):  # browser_evaluate sauve tel quel ce que rend la page : un JSON.stringify arrive doublement encodé
-    releve = json.loads(releve)
+snapshot = json.loads((WORK / args[0]).read_text())
+if isinstance(snapshot, str):  # browser_evaluate saves what the page returns as is: a JSON.stringify arrives double-encoded
+    snapshot = json.loads(snapshot)
 
 
-def analyse_indesirable():
-    groupes = defaultdict(lambda: {"nombre": 0, "adresses": set(), "exemples": []})
-    lignes = {"legitime": [], "connu_gmail": [], "spam_connu": [], "a_classer": []}
-    for m in releve:
-        adresse = str(m.get("from") or "").strip().lower()
-        domaine = adresse.rpartition("@")[2] or "(sans adresse)"
-        c = classe(adresse, domaine)
-        g = groupes[(c, domaine)]
+def analyze_junk():
+    groups = defaultdict(lambda: {"nombre": 0, "adresses": set(), "exemples": []})
+    rows = {"legitime": [], "connu_gmail": [], "spam_connu": [], "a_classer": []}
+    for m in snapshot:
+        address = str(m.get("from") or "").strip().lower()
+        domain = address.rpartition("@")[2] or "(sans adresse)"
+        c = class_of(address, domain)
+        g = groups[(c, domain)]
         g["nombre"] += 1
-        g["adresses"].add(adresse)
+        g["adresses"].add(address)
         if len(g["exemples"]) < 2:
             g["exemples"].append(str(m.get("l") or "")[:120])
-        lignes[c].append({"id": m["id"], "from": adresse, "objet": str(m.get("l") or "")[:160]})
-    sortie = {"total": len(releve), "groupes": [
+        rows[c].append({"id": m["id"], "from": address, "objet": str(m.get("l") or "")[:160]})
+    output = {"total": len(snapshot), "groupes": [
         {"classe": c, "domaine": d, "nombre": g["nombre"], "adresses": sorted(g["adresses"])[:5], "exemples": g["exemples"]}
-        for (c, d), g in sorted(groupes.items(), key=lambda x: (x[0][0], -x[1]["nombre"]))]}
-    if avec_lignes:
-        sortie["lignes"] = lignes
-    print(json.dumps(sortie, ensure_ascii=False, indent=0))
+        for (c, d), g in sorted(groups.items(), key=lambda x: (x[0][0], -x[1]["nombre"]))]}
+    if with_lines:
+        output["lignes"] = rows
+    print(json.dumps(output, ensure_ascii=False, indent=0))
 
 
-def plat(t):
+def flatten(t):
     return re.sub(r"\s+", " ", unicodedata.normalize("NFC", (t or "").encode("utf-8", "ignore").decode("utf-8")).lower().replace("\xa0", " ")).strip()
 
 
-def jour_ligne(l):
-    """Date lue dans le libellé de la liste : « 29/09/2026 », « Mar 27/10 », « Mer 17:45 » ou « 17:45 ». None si elle n'y est pas (invitation d'agenda, objet très long)."""
-    auj = datetime.date.today()
-    m = re.search(r"\b(\d{2})/(\d{2})/(20\d{2})\b", l)
+def row_date(row_text):
+    """Date read from the row's label, as Outlook's French UI writes it: "29/09/2026", "Mar 27/10", "Mer 17:45" or "17:45". None when absent (calendar invitation, very long subject)."""
+    today = datetime.date.today()
+    m = re.search(r"\b(\d{2})/(\d{2})/(20\d{2})\b", row_text)
     if m:
         return datetime.date(int(m[3]), int(m[2]), int(m[1]))
-    m = re.search(r"\b(?:Lun|Mar|Mer|Jeu|Ven|Sam|Dim) (\d{2})/(\d{2})\b", l)
+    m = re.search(r"\b(?:Lun|Mar|Mer|Jeu|Ven|Sam|Dim) (\d{2})/(\d{2})\b", row_text)
     if m:
-        d = datetime.date(auj.year, int(m[2]), int(m[1]))
-        return d if d <= auj else d.replace(year=auj.year - 1)
-    m = re.search(r"\b(Lun|Mar|Mer|Jeu|Ven|Sam|Dim) \d{1,2}:\d{2}\b", l)
+        d = datetime.date(today.year, int(m[2]), int(m[1]))
+        return d if d <= today else d.replace(year=today.year - 1)
+    m = re.search(r"\b(Lun|Mar|Mer|Jeu|Ven|Sam|Dim) \d{1,2}:\d{2}\b", row_text)
     if m:
         for k in range(8):
-            d = auj - datetime.timedelta(days=k)
+            d = today - datetime.timedelta(days=k)
             if d.weekday() == ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].index(m[1]):
                 return d
-    if re.search(r"(?<![à:] )\b\d{1,2}:\d{2}\b", l) and not re.search(r"réunion", l, re.I):
-        return auj
+    if re.search(r"(?<![à:] )\b\d{1,2}:\d{2}\b", row_text) and not re.search(r"réunion", row_text, re.I):
+        return today
     return None
 
 
-def libelle(adresse):
-    if adresse in connus["exacts"]:
-        return connus["exacts"][adresse]
-    parties = adresse.rpartition("@")[2].split(".")
-    for i in range(len(parties) - 1):
-        lib = connus["libelles"].get(".".join(parties[i:]))
-        if lib:
-            return lib
+def gmail_label(address):
+    if address in known["exacts"]:
+        return known["exacts"][address]
+    parts = address.rpartition("@")[2].split(".")
+    for i in range(len(parts) - 1):
+        label = known["libelles"].get(".".join(parts[i:]))
+        if label:
+            return label
     return None
 
 
-def analyse_boite():
-    recents = defaultdict(list)
-    for de, objet, jour in connus["recents"]:
-        recents[de].append((jour, objet))
-    recuperer, archiver, a_verifier = [], [], []
-    recent = (datetime.date.today() - datetime.timedelta(days=RECENT_JOURS)).isoformat()
-    for m in releve:
-        adresse = str(m.get("from") or "").strip().lower()
-        l = str(m.get("l") or "")
-        d = jour_ligne(l)
-        jour = d.isoformat() if d else "0000-00-00"  # date illisible : traité comme ancien, le mail reste dans Archivage
-        texte = plat(l)
-        marge = {(d + datetime.timedelta(days=k)).isoformat() for k in (-1, 0, 1)} if d else set()
-        deja = any(j in marge and o[:30] in texte for j, o in recents.get(adresse, []) if o)
-        lib = libelle(adresse) or ""
-        ligne = {"id": m["id"], "from": adresse, "date": jour, "objet": l[:160]}
-        domaine = adresse.rpartition("@")[2]
-        fiable = adresse in legitimes or domaine in legitimes or connu_gmail(adresse, domaine) or bool(lib and not lib.startswith(non_fiables))
-        if adresse in moi or deja or jour < depuis or (bruit and lib.startswith(bruit)):
-            archiver.append(ligne)
-        elif domaine in spam:
-            a_verifier.append(ligne)
-        elif not fiable:  # la boîte contient aussi de l'hameçonnage passé à travers les filtres : jamais de récupération ni de liste blanche pour un inconnu
-            (a_verifier if jour >= recent else archiver).append(ligne)
+def analyze_inbox():
+    recent_mails = defaultdict(list)
+    for sender, subject, day in known["recents"]:
+        recent_mails[sender].append((day, subject))
+    recover, archive, review = [], [], []
+    recent_since = (datetime.date.today() - datetime.timedelta(days=RECENT_DAYS)).isoformat()
+    for m in snapshot:
+        address = str(m.get("from") or "").strip().lower()
+        row_text = str(m.get("l") or "")
+        d = row_date(row_text)
+        day = d.isoformat() if d else "0000-00-00"  # unreadable date: treated as old, the mail stays in the archive
+        text = flatten(row_text)
+        window = {(d + datetime.timedelta(days=k)).isoformat() for k in (-1, 0, 1)} if d else set()
+        already_in_gmail = any(j in window and o[:30] in text for j, o in recent_mails.get(address, []) if o)
+        label = gmail_label(address) or ""
+        row = {"id": m["id"], "from": address, "date": day, "objet": row_text[:160]}
+        domain = address.rpartition("@")[2]
+        trusted = address in legitimate or domain in legitimate or known_in_gmail(address, domain) or bool(label and not label.startswith(unreliable))
+        if address in me or already_in_gmail or day < since or (noise and label.startswith(noise)):
+            archive.append(row)
+        elif domain in spam:
+            review.append(row)
+        elif not trusted:  # the inbox also holds phishing that got through the filters: never recover nor approve an unknown sender
+            (review if day >= recent_since else archive).append(row)
         else:
-            recuperer.append(ligne)
-    recuperer.sort(key=lambda x: x["date"], reverse=True)
-    archiver.sort(key=lambda x: x["date"], reverse=True)
-    lot = recuperer[:MAX_RECUPERATIONS]
-    approuver = sorted({x["from"] for x in lot if x["from"] not in approuves and not JETABLE.search(x["from"])})
-    a_verifier.sort(key=lambda x: x["date"], reverse=True)
-    print(json.dumps({"total": len(releve), "a_verifier": a_verifier[:50], "a_verifier_total": len(a_verifier), "recuperer": lot, "recuperer_restants": len(recuperer) - len(lot),
-                      "archiver": archiver[:MAX_ARCHIVES], "archiver_restants": max(0, len(archiver) - MAX_ARCHIVES), "approuver": approuver}, ensure_ascii=False, indent=0))
+            recover.append(row)
+    recover.sort(key=lambda x: x["date"], reverse=True)
+    archive.sort(key=lambda x: x["date"], reverse=True)
+    batch = recover[:MAX_RECOVERIES]
+    approve = sorted({x["from"] for x in batch if x["from"] not in approved and not DISPOSABLE.search(x["from"])})
+    review.sort(key=lambda x: x["date"], reverse=True)
+    print(json.dumps({"total": len(snapshot), "a_verifier": review[:50], "a_verifier_total": len(review), "recuperer": batch, "recuperer_restants": len(recover) - len(batch),
+                      "archiver": archive[:MAX_ARCHIVES], "archiver_restants": max(0, len(archive) - MAX_ARCHIVES), "approuver": approve}, ensure_ascii=False, indent=0))
 
 
-analyse_boite() if mode == "boite" else analyse_indesirable()
+analyze_inbox() if mode == "inbox" else analyze_junk()

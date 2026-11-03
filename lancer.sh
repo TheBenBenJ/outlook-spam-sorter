@@ -1,25 +1,26 @@
 #!/bin/zsh
-# Passage quotidien sur Outlook.com (launchd) : daily-pass.mjs, sans agent ni fenêtre. `lancer.sh essai` ne supprime, ne déplace et ne récupère rien.
-# La notification part d'ici, seulement s'il y a quelque chose à faire.
+# Daily pass over Outlook.com, started by launchd: runs daily-pass.mjs, with no agent and no browser window. `lancer.sh essai` is a dry run: it deletes, moves and recovers nothing.
+# The installed launchd job runs this file by path: keep its name. The notification is sent from here, and only when there is something to do.
 MODE="${1:-auto}"
-ICI="${0:A:h}"
+HERE="${0:A:h}"
 LOG="$HOME/Library/Logs/tri-spam-outlook.log"
-print "=== $(date '+%Y-%m-%d %H:%M') passage $MODE ===" >> "$LOG"
-AVANT=$(/opt/homebrew/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("a_verifier",0))' "$ICI/etat-outlook.json" 2>/dev/null || echo 0)
-SORTIE=$(mktemp)
-/opt/homebrew/bin/node "$ICI/daily-pass.mjs" ${MODE:#auto} < /dev/null > "$SORTIE" 2>&1
+print "=== $(date '+%Y-%m-%d %H:%M') run $MODE ===" >> "$LOG"
+BEFORE=$(/opt/homebrew/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("a_verifier",0))' "$HERE/etat-outlook.json" 2>/dev/null || echo 0)
+OUTPUT=$(mktemp)
+/opt/homebrew/bin/node "$HERE/daily-pass.mjs" ${MODE:#auto} < /dev/null > "$OUTPUT" 2>&1
 CODE=$?
-cat "$SORTIE" >> "$LOG"
-RESUME=$(grep '^RÉSUMÉ : ' "$SORTIE" | tail -1); RESUME="${RESUME#RÉSUMÉ : }"
-if [[ $CODE -ne 0 || -z "$RESUME" ]]; then
-  [[ -z "$RESUME" ]] && RESUME="Le passage a échoué, voir ~/Library/Logs/tri-spam-outlook.log"
-  [[ "$MODE" == "auto" ]] && "$ICI/record.py" --echec "$RESUME" > /dev/null
-  ALERTE=1
+cat "$OUTPUT" >> "$LOG"
+SUMMARY=$(grep '^SUMMARY: ' "$OUTPUT" | tail -1); SUMMARY="${SUMMARY#SUMMARY: }"
+if [[ $CODE -ne 0 || -z "$SUMMARY" ]]; then
+  # Notification text: French on purpose.
+  [[ -z "$SUMMARY" ]] && SUMMARY="Le passage a échoué, voir ~/Library/Logs/tri-spam-outlook.log"
+  [[ "$MODE" == "auto" ]] && "$HERE/record.py" --failure "$SUMMARY" > /dev/null
+  ALERT=1
 else
-  # seulement si le nombre de mails à vérifier augmente : sinon la tuile du Dashboard suffit
-  ALERTE=$(/opt/homebrew/bin/python3 -I -c 'import json,sys; e=json.load(open(sys.argv[1])); print(1 if e.get("echec") or e.get("a_verifier",0)>int(sys.argv[2]) else 0)' "$ICI/etat-outlook.json" "$AVANT" 2>/dev/null || echo 1)
-  [[ "$MODE" == "essai" ]] && ALERTE=1
+  # only when the number of mails to review goes up: otherwise the Dashboard tile is enough
+  ALERT=$(/opt/homebrew/bin/python3 -I -c 'import json,sys; e=json.load(open(sys.argv[1])); print(1 if e.get("echec") or e.get("a_verifier",0)>int(sys.argv[2]) else 0)' "$HERE/etat-outlook.json" "$BEFORE" 2>/dev/null || echo 1)
+  [[ "$MODE" == "essai" ]] && ALERT=1
 fi
-[[ "$ALERTE" == "1" ]] && /usr/bin/osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "Tri mails Outlook"' -e 'end run' "$RESUME"
-rm -f "$SORTIE"
-find "$ICI/work" -mindepth 1 -delete
+[[ "$ALERT" == "1" ]] && /usr/bin/osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "Tri mails Outlook"' -e 'end run' "$SUMMARY"
+rm -f "$OUTPUT"
+find "$HERE/work" -mindepth 1 -delete

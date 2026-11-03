@@ -1,275 +1,280 @@
 #!/opt/homebrew/bin/node
-// Passage quotidien sur Outlook.com, sans agent ni fenêtre : ce que fait ce script ne dépend pas de ce que disent les mails, qui sont hostiles. Rien n'est envoyé, aucun lien n'est ouvert.
-// Dossier indésirable : les expéditeurs connus repartent en boîte, le spam sûr va dans Éléments supprimés, le reste attend une séance interactive.
-// Boîte de réception : l'original des mails coincés est déposé dans Gmail puis archivé, ce qui y est déjà part aux archives, les expéditeurs récupérés entrent sur la liste blanche.
-// daily-pass.mjs [essai]     essai : classe et affiche, sans rien supprimer, déplacer, déposer ni consigner. Une seule fenêtre à la fois sur ce profil.
+// Daily pass over Outlook.com, with no agent and no browser window. What this script does never depends on what the mails say: mail content is hostile. Nothing is sent and no link is opened.
+// Junk folder: known senders go back to the inbox, sure spam goes to Deleted Items, the rest waits for an interactive session.
+// Inbox: the original of each stuck mail is deposited into Gmail, then archived; what Gmail already has is archived; recovered senders are added to the safe senders list.
+// daily-pass.mjs [essai]     essai = dry run: classify and print, without deleting, moving, depositing or recording anything. Only one browser at a time on this profile.
+// Strings in French are either Outlook's French UI (selectors) or text that reaches the notification and the Dashboard: keep them as they are.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
-const ICI = path.dirname(fileURLToPath(import.meta.url)), TRAVAIL = path.join(ICI, 'work'), EML = path.join(TRAVAIL, 'eml');
-const ESSAI = process.argv.includes('essai');
+const HERE = path.dirname(fileURLToPath(import.meta.url)), WORK = path.join(HERE, 'work'), EML = path.join(WORK, 'eml');
+const DRY_RUN = process.argv.includes('essai');
 const OUTLOOK = 'https://outlook.live.com/mail/0/';
-const CONFIANCE_SPAM = 0.8, DUREE_MAX = 30 * 60 * 1000;
-const { profil, reinjecter } = JSON.parse(fs.readFileSync(path.join(ICI, 'expediteurs.json')));
+const SPAM_CONFIDENCE = 0.8, MAX_DURATION = 30 * 60 * 1000;
+const { profil: profileDir, reinjecter: reinjectScript } = JSON.parse(fs.readFileSync(path.join(HERE, 'expediteurs.json')));
 
 const log = (...a) => console.log(new Date().toTimeString().slice(0, 8), ...a);
-const attendre = ms => new Promise(r => setTimeout(r, ms));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function script(nom, args = [], input) {
-  const r = spawnSync(path.join(ICI, nom), args, { input, encoding: 'utf8', maxBuffer: 1 << 26 });
-  if (r.status !== 0) throw new Error(`${nom} : ${(r.stderr || r.error || '').toString().trim().slice(-200)}`);
+function runScript(name, args = [], input) {
+  const r = spawnSync(path.join(HERE, name), args, { input, encoding: 'utf8', maxBuffer: 1 << 26 });
+  if (r.status !== 0) throw new Error(`${name} : ${(r.stderr || r.error || '').toString().trim().slice(-200)}`);
   return r.stdout;
 }
 
-function analyser(nom, releve, args) {
-  fs.writeFileSync(path.join(TRAVAIL, nom), JSON.stringify(releve));
-  return JSON.parse(script('analyze.py', [...args, nom]));
+function analyze(file, snapshot, args) {
+  fs.writeFileSync(path.join(WORK, file), JSON.stringify(snapshot));
+  return JSON.parse(runScript('analyze.py', [...args, file]));
 }
 
-// Lignes de la liste -> verdict de Haiku. Sans avis, rien ne bouge : la ligne attend le passage suivant.
-function juger(lignes) {
-  if (!lignes.length) return () => ({});
+// List rows -> Haiku's verdict. Without a verdict nothing moves: the row waits for the next run.
+function judge(rows) {
+  if (!rows.length) return () => ({});
   try {
-    const avis = JSON.parse(script('classify.py', [], JSON.stringify(lignes.map((l, n) => ({ n, from: l.from, objet: l.objet })))));
-    return l => avis[lignes.indexOf(l)] || {};
+    const verdicts = JSON.parse(runScript('classify.py', [], JSON.stringify(rows.map((l, n) => ({ n, from: l.from, objet: l.objet })))));
+    return l => verdicts[rows.indexOf(l)] || {};
   } catch (e) {
-    log('avis de Haiku indisponible :', e.message);
+    log('Haiku verdicts unavailable:', e.message);
     return () => ({});
   }
 }
 
-async function ouvrir(page, dossier) {
-  await page.goto(OUTLOOK + dossier);
-  const pret = await page.waitForSelector('[role="treeitem"]', { timeout: 90000 }).then(() => true, () => false);
-  if (!pret || !page.url().startsWith(OUTLOOK)) throw new Error('Session Outlook expirée, lancer /tri-spam-outlook');
-  await attendre(3000);
+async function openFolder(page, folder) {
+  await page.goto(OUTLOOK + folder);
+  const ready = await page.waitForSelector('[role="treeitem"]', { timeout: 90000 }).then(() => true, () => false);
+  // The Dashboard looks for "Session Outlook" in this message to show its "reconnect" tile.
+  if (!ready || !page.url().startsWith(OUTLOOK)) throw new Error('Session Outlook expirée, lancer /tri-spam-outlook');
+  await sleep(3000);
 }
 
-// La liste est virtualisée : seules les lignes proches de l'écran sont dans la page.
-const relever = page => page.evaluate(async () => {
-  const z = triListe();
+// The list is virtualised: only the rows close to the viewport are in the page.
+const readList = page => page.evaluate(async () => {
+  const z = tsoListScroller();
   if (z) { z.scrollTop = 0; await new Promise(r => setTimeout(r, 500)); }
-  const vus = new Map();
-  for (let k = 0, calme = 0; k < 900 && calme < 14; k++) {
-    const avant = vus.size;
-    for (const o of triLignes()) {
+  const seen = new Map();
+  for (let k = 0, idle = 0; k < 900 && idle < 14; k++) {
+    const before = seen.size;
+    for (const o of tsoListRows()) {
       const id = o.getAttribute('data-convid');
-      if (id && !vus.has(id)) vus.set(id, { id, from: o.querySelector('[title*="@"]')?.getAttribute('title') || '', l: (o.getAttribute('aria-label') || '').slice(0, 300) });
+      if (id && !seen.has(id)) seen.set(id, { id, from: o.querySelector('[title*="@"]')?.getAttribute('title') || '', l: (o.getAttribute('aria-label') || '').slice(0, 300) });
     }
-    calme = vus.size === avant ? calme + 1 : 0;
+    idle = seen.size === before ? idle + 1 : 0;
     if (!z) break;
     z.scrollTop += z.clientHeight * 0.9;
     await new Promise(r => setTimeout(r, 260));
   }
   if (z) z.scrollTop = 0;
-  return [...vus.values()];
+  return [...seen.values()];
 });
 
-// Clic en JavaScript : un calque d'Outlook intercepte parfois les clics simulés. Jamais « Vider le dossier » : seul le nom exact est cliqué.
-const cliquer = (page, nom) => page.evaluate(nom => {
+// Click through JavaScript: an Outlook overlay sometimes intercepts simulated clicks. Never "Vider le dossier" (empty folder): only the exact label is clicked.
+const clickButton = (page, label) => page.evaluate(label => {
   const b = [...document.querySelectorAll('button')].filter(b => b.getClientRects().length && !b.disabled && b.getAttribute('aria-disabled') !== 'true')
-    .find(b => (b.getAttribute('aria-label') || b.innerText || '').trim() === nom);
+    .find(b => (b.getAttribute('aria-label') || b.innerText || '').trim() === label);
   if (b) b.click();
   return !!b;
-}, nom);
+}, label);
 
-async function partis(page, ids, ms = 6000) {
+async function gone(page, ids, ms = 6000) {
   for (let t = 0; t < ms; t += 150) {
-    const reste = await page.evaluate(ids => triLignes().some(o => ids.includes(o.getAttribute('data-convid'))), ids);
-    if (!reste) return true;
-    await attendre(150);
+    const left = await page.evaluate(ids => tsoListRows().some(o => ids.includes(o.getAttribute('data-convid'))), ids);
+    if (!left) return true;
+    await sleep(150);
   }
   return false;
 }
 
-// Boîte de dialogue ouverte : son texte, ou null. Si elle parle de suppression définitive, on annule et on s'arrête.
-async function garderDialogue(page) {
-  const texte = await page.evaluate(() => {
+// Open dialog: its text, or null. If it mentions permanent deletion, cancel it and stop the run.
+async function guardDialog(page) {
+  const text = await page.evaluate(() => {
     const d = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"]')].filter(x => x.getClientRects().length).pop();
     return d ? d.innerText.slice(0, 200) : null;
   });
-  if (texte && /définitivement/i.test(texte)) {
+  if (text && /définitivement/i.test(text)) {
     await page.evaluate(() => [...[...document.querySelectorAll('[role="dialog"],[role="alertdialog"]')].pop().querySelectorAll('button')].find(b => /Annuler/.test(b.innerText))?.click());
     throw new Error('Outlook propose une suppression définitive : annulée, passage arrêté');
   }
-  return texte;
+  return text;
 }
 
-// Ouvre chaque ligne voulue, une à une, et lui applique un geste. -> lignes jamais trouvées
-async function chaqueLigne(page, ids, geste) {
-  const restants = new Set(ids);
-  for (let calme = 0; restants.size && calme < 150;) {
-    const id = await page.evaluate(voulues => {
-      const o = triLignes().find(o => voulues.includes(o.getAttribute('data-convid')));
+// Open each wanted row, one at a time, and apply an action to it. -> rows never found
+async function eachRow(page, ids, action) {
+  const pending = new Set(ids);
+  for (let idle = 0; pending.size && idle < 150;) {
+    const id = await page.evaluate(wanted => {
+      const o = tsoListRows().find(o => wanted.includes(o.getAttribute('data-convid')));
       if (o) { o.click(); return o.getAttribute('data-convid'); }
-      const z = triListe();
+      const z = tsoListScroller();
       if (z) z.scrollTop += z.clientHeight * 0.9;
       return null;
-    }, [...restants]);
-    if (!id) { calme++; await attendre(350); continue; }
-    calme = 0;
-    restants.delete(id);
-    await attendre(1500);
+    }, [...pending]);
+    if (!id) { idle++; await sleep(350); continue; }
+    idle = 0;
+    pending.delete(id);
+    await sleep(1500);
     try {
-      await geste(id);
+      await action(id);
     } catch (e) {
       if (/définitive/.test(e.message)) throw e;
-      log('geste en échec :', e.message.split('\n')[0].slice(0, 120));
+      log('action failed:', e.message.split('\n')[0].slice(0, 120));
       await page.keyboard.press('Escape').catch(() => {});
     }
   }
-  return restants;
+  return pending;
 }
 
-// Coche les lignes voulues et clique un bouton du ruban, par lots : plus rapide qu'une à une. -> nombre de lignes parties
-async function parLots(page, ids, bouton) {
-  const restants = new Set(ids);
-  let faits = 0;
-  await page.evaluate(() => { const z = triListe(); if (z) z.scrollTop = 0; });
-  for (let vides = 0; restants.size && vides < 150;) {
-    const r = await page.evaluate(async voulues => {
-      const lignes = triLignes().filter(o => voulues.includes(o.getAttribute('data-convid'))).slice(0, 25);
-      if (!lignes.length) {
-        const z = triListe();
+// Tick the wanted rows and click a ribbon button, in batches: faster than one at a time. -> number of rows gone
+async function inBatches(page, ids, button) {
+  const pending = new Set(ids);
+  let done = 0;
+  await page.evaluate(() => { const z = tsoListScroller(); if (z) z.scrollTop = 0; });
+  for (let empty = 0; pending.size && empty < 150;) {
+    const r = await page.evaluate(async wanted => {
+      const rows = tsoListRows().filter(o => wanted.includes(o.getAttribute('data-convid'))).slice(0, 25);
+      if (!rows.length) {
+        const z = tsoListScroller();
         if (z) z.scrollTop += z.clientHeight * 0.9;
-        return { coches: [] };
+        return { ticked: [] };
       }
-      const basculer = o => o.querySelector('[role="checkbox"],input[type="checkbox"]')?.click();
-      for (const o of lignes) {
-        if (o.getAttribute('aria-selected') !== 'true') basculer(o);
+      const toggle = o => o.querySelector('[role="checkbox"],input[type="checkbox"]')?.click();
+      for (const o of rows) {
+        if (o.getAttribute('aria-selected') !== 'true') toggle(o);
         await new Promise(r => setTimeout(r, 40));
       }
       await new Promise(r => setTimeout(r, 450));
-      // rien d'autre ne doit être sélectionné, un mail resté ouvert par exemple
-      const intrus = triLignes().some(o => o.getAttribute('aria-selected') === 'true' && !voulues.includes(o.getAttribute('data-convid')));
-      if (intrus) lignes.forEach(basculer);
-      return { coches: lignes.map(o => o.getAttribute('data-convid')), intrus };
-    }, [...restants]);
-    if (!r.coches.length) { vides++; await attendre(350); continue; }
-    if (r.intrus) { await page.keyboard.press('Escape'); await attendre(800); vides++; continue; }
-    if (!await cliquer(page, bouton)) throw new Error(`bouton « ${bouton} » introuvable`);
-    await attendre(500);
-    await garderDialogue(page);
-    if (!await partis(page, r.coches)) { vides++; continue; }
-    vides = 0;
-    r.coches.forEach(id => restants.delete(id));
-    faits += r.coches.length;
-    await attendre(1200);
+      // nothing else may be selected, such as a mail left open
+      const intruder = tsoListRows().some(o => o.getAttribute('aria-selected') === 'true' && !wanted.includes(o.getAttribute('data-convid')));
+      if (intruder) rows.forEach(toggle);
+      return { ticked: rows.map(o => o.getAttribute('data-convid')), intruder };
+    }, [...pending]);
+    if (!r.ticked.length) { empty++; await sleep(350); continue; }
+    if (r.intruder) { await page.keyboard.press('Escape'); await sleep(800); empty++; continue; }
+    if (!await clickButton(page, button)) throw new Error(`bouton « ${button} » introuvable`);
+    await sleep(500);
+    await guardDialog(page);
+    if (!await gone(page, r.ticked)) { empty++; continue; }
+    empty = 0;
+    r.ticked.forEach(id => pending.delete(id));
+    done += r.ticked.length;
+    await sleep(1200);
   }
-  return faits;
+  return done;
 }
 
-async function indesirable(page) {
-  await ouvrir(page, 'junkemail');
-  const releve = await relever(page);
-  const { lignes } = analyser('indesirable.json', releve, ['--lignes']);
-  const aJuger = [...lignes.connu_gmail, ...lignes.a_classer];
-  const avis = juger(aJuger);
-  const remettre = [...lignes.legitime, ...lignes.connu_gmail.filter(l => avis(l).verdict === 'legitime')];
-  const nouveauxSpams = lignes.a_classer.filter(l => avis(l).verdict === 'spam' && avis(l).confiance >= CONFIANCE_SPAM);
-  const supprimer = [...lignes.spam_connu, ...nouveauxSpams];
-  const attente = aJuger.filter(l => !remettre.includes(l) && !supprimer.includes(l));
-  log(`indésirable : ${releve.length} lignes, ${remettre.length} à remettre, ${supprimer.length} spams, ${attente.length} à vérifier`);
-  attente.forEach(l => log('  à vérifier :', l.from, '|', l.objet.slice(0, 70), JSON.stringify(avis(l))));
-  const bilan = { examines: releve.length, remis: [], supprimes: 0, attente: attente.length, nouveauxSpams };
-  if (ESSAI) {
-    remettre.forEach(l => log('  à remettre :', l.from, '|', l.objet.slice(0, 70)));
-    supprimer.forEach(l => log('  spam :', l.from, '|', l.objet.slice(0, 70)));
-    return bilan;
+async function junkFolder(page) {
+  await openFolder(page, 'junkemail');
+  const snapshot = await readList(page);
+  const { lignes: byClass } = analyze('junk.json', snapshot, ['--lines']);
+  const toJudge = [...byClass.connu_gmail, ...byClass.a_classer];
+  const verdictOf = judge(toJudge);
+  const restore = [...byClass.legitime, ...byClass.connu_gmail.filter(l => verdictOf(l).verdict === 'legitime')];
+  const newSpam = byClass.a_classer.filter(l => verdictOf(l).verdict === 'spam' && verdictOf(l).confiance >= SPAM_CONFIDENCE);
+  const remove = [...byClass.spam_connu, ...newSpam];
+  const waiting = toJudge.filter(l => !restore.includes(l) && !remove.includes(l));
+  log(`junk: ${snapshot.length} rows, ${restore.length} to restore, ${remove.length} spam, ${waiting.length} to review`);
+  waiting.forEach(l => log('  to review:', l.from, '|', l.objet.slice(0, 70), JSON.stringify(verdictOf(l))));
+  const report = { examined: snapshot.length, restored: [], deleted: 0, waiting: waiting.length, newSpam };
+  if (DRY_RUN) {
+    restore.forEach(l => log('  to restore:', l.from, '|', l.objet.slice(0, 70)));
+    remove.forEach(l => log('  spam:', l.from, '|', l.objet.slice(0, 70)));
+    return report;
   }
-  // Outlook les renvoie en boîte, d'où le balayage suivant les récupère dans Gmail. Sa boîte de dialogue, cochée d'office, met aussi l'expéditeur sur la liste blanche.
-  const parId = new Map(remettre.map(l => [l.id, l]));
-  const perdus = await chaqueLigne(page, [...parId.keys()], async id => {
-    if (!await cliquer(page, 'Courrier légitime')) throw new Error(`« Courrier légitime » introuvable pour ${parId.get(id).from}`);
-    await attendre(800);
-    if (await garderDialogue(page)) await cliquer(page, 'OK');
-    if (await partis(page, [id])) bilan.remis.push(parId.get(id).from);
-    else { bilan.attente++; log('  non remis :', parId.get(id).from); }
+  // Outlook sends them back to the inbox, where the inbox sweep then recovers them into Gmail. Its dialog, ticked by default, also adds the sender to the safe senders list.
+  const byId = new Map(restore.map(l => [l.id, l]));
+  const lost = await eachRow(page, [...byId.keys()], async id => {
+    if (!await clickButton(page, 'Courrier légitime')) throw new Error(`"Courrier légitime" not found for ${byId.get(id).from}`);
+    await sleep(800);
+    if (await guardDialog(page)) await clickButton(page, 'OK');
+    if (await gone(page, [id])) report.restored.push(byId.get(id).from);
+    else { report.waiting++; log('  not restored:', byId.get(id).from); }
   });
-  bilan.attente += perdus.size;
+  report.waiting += lost.size;
   await page.keyboard.press('Escape').catch(() => {});
-  bilan.supprimes = await parLots(page, supprimer.map(l => l.id), 'Supprimer');
-  bilan.attente += supprimer.length - bilan.supprimes;
-  log(`indésirable : ${bilan.remis.length} remis, ${bilan.supprimes} supprimés`);
-  return bilan;
+  report.deleted = await inBatches(page, remove.map(l => l.id), 'Supprimer');
+  report.waiting += remove.length - report.deleted;
+  log(`junk: ${report.restored.length} restored, ${report.deleted} deleted`);
+  return report;
 }
 
-async function boite(page) {
-  await ouvrir(page, 'inbox');
-  const releve = await relever(page);
-  const a = analyser('boite.json', releve, ['boite']);
-  const avis = juger(a.recuperer);
-  const aRecuperer = a.recuperer.filter(l => avis(l).verdict === 'legitime');
-  const attente = a.recuperer.filter(l => !aRecuperer.includes(l));
-  log(`boîte : ${releve.length} lignes, ${aRecuperer.length} à récupérer, ${a.archiver.length} à archiver, ${a.a_verifier_total + attente.length} à vérifier, ${a.recuperer_restants + a.archiver_restants} pour un prochain passage`);
-  [...a.a_verifier, ...attente].forEach(l => log('  à vérifier :', l.from, '|', l.objet.slice(0, 70), JSON.stringify(avis(l))));
-  const bilan = { examines: releve.length, deposes: 0, recuperes: new Set(), archives: 0, attente: a.a_verifier_total + attente.length, restants: a.recuperer_restants + a.archiver_restants, approuver: [] };
-  if (ESSAI) {
-    aRecuperer.forEach(l => log('  à récupérer :', l.from, '|', l.objet.slice(0, 70)));
-    a.archiver.forEach(l => log('  à archiver :', l.from, '|', l.objet.slice(0, 70)));
-    return bilan;
+async function inbox(page) {
+  await openFolder(page, 'inbox');
+  const snapshot = await readList(page);
+  const analysis = analyze('inbox.json', snapshot, ['inbox']);
+  const verdictOf = judge(analysis.recuperer);
+  const toRecover = analysis.recuperer.filter(l => verdictOf(l).verdict === 'legitime');
+  const waiting = analysis.recuperer.filter(l => !toRecover.includes(l));
+  log(`inbox: ${snapshot.length} rows, ${toRecover.length} to recover, ${analysis.archiver.length} to archive, ${analysis.a_verifier_total + waiting.length} to review, ${analysis.recuperer_restants + analysis.archiver_restants} left for a later run`);
+  [...analysis.a_verifier, ...waiting].forEach(l => log('  to review:', l.from, '|', l.objet.slice(0, 70), JSON.stringify(verdictOf(l))));
+  const report = { examined: snapshot.length, deposited: 0, recovered: new Set(), archived: 0, waiting: analysis.a_verifier_total + waiting.length, remaining: analysis.recuperer_restants + analysis.archiver_restants, approve: [] };
+  if (DRY_RUN) {
+    toRecover.forEach(l => log('  to recover:', l.from, '|', l.objet.slice(0, 70)));
+    analysis.archiver.forEach(l => log('  to archive:', l.from, '|', l.objet.slice(0, 70)));
+    return report;
   }
-  const parId = new Map(aRecuperer.map(l => [l.id, l]));
-  const perdus = await chaqueLigne(page, [...parId.keys()], async id => {
-    const fichier = path.join(EML, id.replace(/[^A-Za-z0-9]/g, '_').slice(-40) + '.eml');
+  const byId = new Map(toRecover.map(l => [l.id, l]));
+  const lost = await eachRow(page, [...byId.keys()], async id => {
+    const file = path.join(EML, id.replace(/[^A-Za-z0-9]/g, '_').slice(-40) + '.eml');
     await page.locator('[role="main"] button[aria-label="More items"]').first().click({ timeout: 8000 });
-    await page.getByRole('menu').getByRole('button', { name: 'Télécharger', exact: true }).click({ timeout: 5000 });   // pas celui d'une pièce jointe
+    await page.getByRole('menu').getByRole('button', { name: 'Télécharger', exact: true }).click({ timeout: 5000 });   // not an attachment's download button
     const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.getByRole('menuitem', { name: 'Téléchargez en EML' }).click({ timeout: 5000 })]);
-    await dl.saveAs(fichier);   // pas de touche Échap ici : elle fermerait le mail, et « Archiver » n'agirait plus sur rien
-    const sortie = spawnSync(reinjecter, [fichier], { encoding: 'utf8' }).stdout.trim().split('\n').pop();
-    const r = JSON.parse(sortie || '{"statut":"echec","motif":"pas de réponse"}');
-    if (r.statut === 'refuse') { bilan.attente++; log('  refusé :', r.de, '|', (r.objet || '').slice(0, 50), r.motif); return; }
-    if (r.statut === 'echec') { bilan.restants++; log('  échec du dépôt :', r.de, r.motif); return; }
-    bilan.recuperes.add(parId.get(id).from);
-    if (r.statut === 'depose') bilan.deposes++;
-    if (await cliquer(page, 'Archiver') && await partis(page, [id])) bilan.archives++;
-    else log('  non archivé :', r.de);
+    await dl.saveAs(file);   // no Escape key here: it would close the mail, and "Archiver" would then act on nothing
+    // Reinjection contract: the script prints one JSON line per file; statut is depose, deja, refuse or echec.
+    const lastLine = spawnSync(reinjectScript, [file], { encoding: 'utf8' }).stdout.trim().split('\n').pop();
+    const r = JSON.parse(lastLine || '{"statut":"echec","motif":"no response"}');
+    if (r.statut === 'refuse') { report.waiting++; log('  refused:', r.de, '|', (r.objet || '').slice(0, 50), r.motif); return; }
+    if (r.statut === 'echec') { report.remaining++; log('  deposit failed:', r.de, r.motif); return; }
+    report.recovered.add(byId.get(id).from);
+    if (r.statut === 'depose') report.deposited++;
+    if (await clickButton(page, 'Archiver') && await gone(page, [id])) report.archived++;
+    else log('  not archived:', r.de);
   });
-  bilan.restants += perdus.size;
+  report.remaining += lost.size;
   await page.keyboard.press('Escape').catch(() => {});
-  bilan.archives += await parLots(page, a.archiver.map(l => l.id), 'Archiver');
-  bilan.approuver = a.approuver.filter(x => bilan.recuperes.has(x));
-  log(`boîte : ${bilan.deposes} déposés, ${bilan.recuperes.size} expéditeurs récupérés, ${bilan.archives} archivés`);
-  return bilan;
+  report.archived += await inBatches(page, analysis.archiver.map(l => l.id), 'Archiver');
+  report.approve = analysis.approuver.filter(x => report.recovered.has(x));
+  log(`inbox: ${report.deposited} deposited, ${report.recovered.size} senders recovered, ${report.archived} archived`);
+  return report;
 }
 
-async function listeBlanche(page, adresses) {
-  if (!adresses.length) return [];
+async function safeSenders(page, addresses) {
+  if (!addresses.length) return [];
   await page.goto(OUTLOOK + 'options/mail/junkEmail');
   const d = page.locator('[role="dialog"]').last();
-  const ajouter = d.getByRole('button', { name: 'Ajouter un expéditeur approuvé' });
-  await ajouter.waitFor({ timeout: 30000 });
-  const champ = d.locator('input[placeholder*="abc123"]');
-  for (const a of adresses) {
-    if (!await champ.isVisible()) await ajouter.click();
-    await champ.fill(a);
-    await champ.press('Enter');
-    await attendre(600);
+  const addButton = d.getByRole('button', { name: 'Ajouter un expéditeur approuvé' });
+  await addButton.waitFor({ timeout: 30000 });
+  const field = d.locator('input[placeholder*="abc123"]');
+  for (const a of addresses) {
+    if (!await field.isVisible()) await addButton.click();
+    await field.fill(a);
+    await field.press('Enter');
+    await sleep(600);
   }
-  const texte = await d.innerText();
-  const ajoutes = adresses.filter(a => texte.includes(a));
+  const text = await d.innerText();
+  const added = addresses.filter(a => text.includes(a));
   await d.getByRole('button', { name: 'Enregistrer' }).click();
-  await attendre(2500);
-  log(`liste blanche : ${ajoutes.length}/${adresses.length} ajoutées`);
-  return ajoutes;
+  await sleep(2500);
+  log(`safe senders: ${added.length}/${addresses.length} added`);
+  return added;
 }
 
-function echec(motif) {
-  if (!ESSAI) script('record.py', ['--echec', motif]);
-  console.log(`RÉSUMÉ : ${motif}`);
+// The reason goes to etat-outlook.json, the notification and the Dashboard: it stays in French.
+function fail(reason) {
+  if (!DRY_RUN) runScript('record.py', ['--failure', reason]);
+  console.log(`SUMMARY: ${reason}`);
 }
 
 fs.mkdirSync(EML, { recursive: true, mode: 0o700 });
-setTimeout(() => { echec('Le passage Outlook dépasse 30 minutes : arrêté'); process.exit(1); }, DUREE_MAX).unref();
+setTimeout(() => { fail('Le passage Outlook dépasse 30 minutes : arrêté'); process.exit(1); }, MAX_DURATION).unref();
 let ctx, code = 0;
 try {
-  ctx = await chromium.launchPersistentContext(profil, { channel: 'chrome', headless: true, acceptDownloads: true, viewport: { width: 1500, height: 1000 } });
+  ctx = await chromium.launchPersistentContext(profileDir, { channel: 'chrome', headless: true, acceptDownloads: true, viewport: { width: 1500, height: 1000 } });
+  // Page helpers, prefixed so they cannot clash with Outlook's own globals.
   await ctx.addInitScript(() => {
-    window.triLignes = () => [...document.querySelectorAll('[role="option"]')];
-    window.triListe = () => {
+    window.tsoListRows = () => [...document.querySelectorAll('[role="option"]')];
+    window.tsoListScroller = () => {
       for (let z = document.querySelector('[role="option"]'); z; z = z.parentElement) {
         if (/(auto|scroll)/.test(getComputedStyle(z).overflowY) && z.scrollHeight > z.clientHeight) return z;
       }
@@ -277,21 +282,22 @@ try {
     };
   });
   const page = ctx.pages()[0] || await ctx.newPage();
-  const ind = await indesirable(page);
-  const bo = await boite(page);
-  const aVerifier = ind.attente + bo.attente;
-  if (!ESSAI) {
-    const approuves = await listeBlanche(page, bo.approuver.filter(x => !ind.remis.includes(x)));
-    const familles = {};
-    ind.nouveauxSpams.forEach(l => { const d = l.from.split('@').pop(); familles[d] = (familles[d] || 0) + 1; });
-    const spam = Object.keys(familles).filter(d => familles[d] >= 3);
-    script('record.py', ['--examines', ind.examines + bo.examines, '--remis', ind.remis.length, '--supprimes', ind.supprimes, '--a-verifier', aVerifier,
-      '--recuperes', bo.deposes, '--archives', bo.archives, '--restants', bo.restants, '--spam', ...spam, '--legitimes', ...ind.remis, '--approuves', ...approuves].map(String));
+  const junk = await junkFolder(page);
+  const box = await inbox(page);
+  const toReview = junk.waiting + box.waiting;
+  if (!DRY_RUN) {
+    const approved = await safeSenders(page, box.approve.filter(x => !junk.restored.includes(x)));
+    const perDomain = {};
+    junk.newSpam.forEach(l => { const d = l.from.split('@').pop(); perDomain[d] = (perDomain[d] || 0) + 1; });
+    const spamDomains = Object.keys(perDomain).filter(d => perDomain[d] >= 3);
+    runScript('record.py', ['--examined', junk.examined + box.examined, '--restored', junk.restored.length, '--deleted', junk.deleted, '--to-review', toReview,
+      '--recovered', box.deposited, '--archived', box.archived, '--remaining', box.remaining, '--spam', ...spamDomains, '--legitimate', ...junk.restored, '--approved', ...approved].map(String));
   }
-  console.log(`RÉSUMÉ : ${ESSAI ? 'essai, rien de changé. ' : ''}${ind.remis.length} remis en boîte, ${ind.supprimes} spams supprimés, ${bo.deposes} déposés dans Gmail, ${bo.archives} archivés, ${aVerifier} à vérifier.`);
+  // The summary is the notification text: French on purpose.
+  console.log(`SUMMARY: ${DRY_RUN ? 'essai, rien de changé. ' : ''}${junk.restored.length} remis en boîte, ${junk.deleted} spams supprimés, ${box.deposited} déposés dans Gmail, ${box.archived} archivés, ${toReview} à vérifier.`);
 } catch (e) {
   code = 1;
-  echec(/ProcessSingleton|SingletonLock|already in use/.test(e.message) ? 'Navigateur déjà ouvert sur le profil Outlook : passage sauté' : e.message.split('\n')[0].slice(0, 150));
+  fail(/ProcessSingleton|SingletonLock|already in use/.test(e.message) ? 'Navigateur déjà ouvert sur le profil Outlook : passage sauté' : e.message.split('\n')[0].slice(0, 150));
 } finally {
   await ctx?.close().catch(() => {});
 }
