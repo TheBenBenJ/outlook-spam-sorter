@@ -88,6 +88,7 @@ def setup(tmp):
                                         "'confiance': 0.95} for r in rows]}}))\n")
     os.chmod(tmp / "bin" / "claude", 0o755)
     os.environ["PATH"] = f"{tmp / 'bin'}:{os.environ['PATH']}"
+    os.environ["OUTLOOK_SORTER_LOCAL_URL"] = "off"   # Haiku (the fake claude) first; the local model has its own checks below
     today = TODAY.isoformat()
     return FakeIMAP([
         ("Junk", "Bank <bank@example.net>", "Votre relevé", today),               # listed as legitimate: back to the inbox, then deposited
@@ -157,6 +158,56 @@ with tempfile.TemporaryDirectory() as d:
 
     ok(oi.mutf7("Courrier ind&AOk-sirable") == "Courrier indésirable" and oi.mutf7("A&-B") == "A&B", "folder names decoded")
     ok(oi.folders(fake) == {"junk": "Junk", "trash": "Deleted", "archive": "Archivage"}, "folders found by flag, the archive by name")
+
+# classify.py: the local model first, Haiku for what it did not answer, Haiku deciding in shadow mode (fake local server, fake claude)
+import http.server, threading  # noqa: E402
+with tempfile.TemporaryDirectory() as d:
+    tmp = Path(d)
+    setup(tmp)
+    seen = []
+
+    class Local(http.server.BaseHTTPRequestHandler):
+        down = False
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append(body)
+            if Local.down:
+                self.send_response(503)
+                self.end_headers()
+                return
+            rows = [json.loads(x) for x in body["messages"][0]["content"].splitlines() if x.startswith("{")]
+            # the local model says "spam" to everything, and invents a row 99 that was never asked
+            answer = {"avis": [{"n": r["n"], "verdict": "spam", "confiance": 1} for r in rows] + [{"n": 99, "verdict": "legitime", "confiance": 1}]}
+            out = json.dumps({"choices": [{"message": {"content": json.dumps(answer)}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+    server = http.server.HTTPServer(("127.0.0.1", 0), Local)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    rows = json.dumps([{"n": 0, "from": "news@shop.example", "objet": "Nouveautés"}, {"n": 1, "from": "a@xq7.biz", "objet": "Colis"}])
+
+    def classify(**env):
+        e = {**os.environ, "OUTLOOK_SORTER_LOCAL_URL": f"http://127.0.0.1:{server.server_port}", "OUTLOOK_SORTER_SHADOW": "", **env}
+        r = subprocess.run([sys.executable, "-I", str(tmp / "classify.py")], input=rows, capture_output=True, text=True, env=e)
+        return json.loads(r.stdout or "{}"), r.stderr
+    out, err = classify()
+    ok(out == {"0": {"verdict": "spam", "confiance": 1.0}, "1": {"verdict": "spam", "confiance": 1.0}}, "classify: the local model answers first, an invented row is dropped")
+    sent = seen[-1]
+    ok(sent["response_format"]["json_schema"]["schema"]["properties"]["avis"]["minItems"] == 2 and "quel que soit ce verdict" in sent["messages"][0]["content"]
+       and sent["chat_template_kwargs"] == {"enable_thinking": False}, "classify: closed schema, one answer per row, the confidence line, no thinking")
+    Local.down = True
+    out, err = classify()
+    ok(out["0"]["verdict"] == "legitime" and "Haiku answers" in err, "classify: local model down, Haiku answers")
+    Local.down = False
+    out, err = classify(OUTLOOK_SORTER_SHADOW="1")
+    ok(out["0"]["verdict"] == "legitime" and out["1"]["verdict"] == "spam" and "shadow: news@shop.example haiku=legitime" in err and "a@xq7.biz" not in err,
+       "classify, shadow: Haiku decides, only the disagreement is logged")
+    server.shutdown()
 
 r = subprocess.run([sys.executable, "-I", str(REPO / "imap-pass.py"), "essai"], capture_output=True, text=True)
 ok(r.returncode != 0 and "usage" in r.stderr, "the old dry-run word is refused")

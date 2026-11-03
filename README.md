@@ -35,7 +35,7 @@ launchd (daily) ─► run.sh ─► daily-pass.mjs  (headless Chrome, persisten
 | `outlook_imap.py` | OAuth grant (`authorize <client-id>`, device code), token refresh, IMAP connection and folders (`check`). |
 | `tests.py` | Offline checks of the IMAP pass: fake IMAP server, fake `claude`, fake deposit script. |
 | `analyze.py` | Reads a list snapshot and the settings, writes nothing: which class each row belongs to, what to recover, archive or approve. |
-| `classify.py` | The only AI call: Haiku through `claude -p`, with no tools, returns a verdict from a closed list for each row. |
+| `classify.py` | The only AI call, with no tools: a verdict from a closed list for each row, from a local model when one answers (`$OUTLOOK_SORTER_LOCAL_URL`, OpenAI API, default `127.0.0.1:11234`), else Haiku through `claude -p`. `OUTLOOK_SORTER_SHADOW=1`: Haiku decides and each disagreement with the local model is logged. |
 | `record.py` | Writes the outcome of a run into the three JSON files below. |
 | `skill/` | Claude Code skill for interactive sessions (in French, like its trigger phrases). |
 | `senders.json` | Settings and memory (git-ignored). Start from `senders.example.json`. |
@@ -146,6 +146,7 @@ Troubleshooting (the reasons below appear in the notification and in `outlook-st
 ## Design decisions
 
 - **A script drives the browser, not an agent.** The first version (October 2026) was a weekly Claude agent in `dontAsk` mode, with a closed tool list and Playwright MCP. Those limits reduced the risk of prompt injection without removing it: an agent reading hostile mail still held a signed-in browser that could delete messages. The pass is now a plain Playwright script whose actions depend only on sender addresses and fixed rules.
+- **A local model before Haiku** (3 November 2026). On the home server, Qwen 3.5 9B answers the same closed list for free, and senders and subjects stay there. It read "confiance" as how legitimate a mail is, so one line of its prompt says what it means; it is also more categorical than Haiku (a compromised relay's mail that Haiku called doubtful, it calls spam). A shadow week compares the two on real mail before it decides. A model can only answer the rows it was asked, from the list.
 - **One AI call, without tools, on a closed list.** Classifying a row is the only fuzzy step, so it is the only place a model is used. Deleting needs a spam verdict with confidence >= 0.8, and a missing verdict moves nothing.
 - **Deposit the original instead of forwarding.** A forward arrives as "TR:", from the Hotmail address and dated today. Depositing the `.eml` over IMAP keeps the real sender, subject and date, and sends nothing. Because a deposit skips Gmail's spam filter, the depositor accepts only known, authenticated senders.
 - **Why sweep the inbox at all.** Outlook forwards to Gmail without keeping a copy, except for a few percent of mails that stay in the inbox, including mails from safe senders. Those mails carry a spam confidence level of 5 (`X-MS-Exchange-Organization-SCL`): the safe senders list makes them land in the inbox, not leave it. What is left in the inbox therefore never reached Gmail.

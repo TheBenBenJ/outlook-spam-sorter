@@ -1,14 +1,20 @@
 #!/opt/homebrew/bin/python3 -I
-"""Haiku's verdict, with no tool at all, on rows of Outlook's mail list: reads [{"n", "from", "objet"}] on stdin, writes {n: {"verdict", "confiance"}}.
+"""A verdict, with no tool at all, on rows of Outlook's mail list: reads [{"n", "from", "objet"}] on stdin, writes {n: {"verdict", "confiance"}}.
+
+Which model: a local model first ($OUTLOOK_SORTER_LOCAL_URL, OpenAI API, default 127.0.0.1:11234, the home server's Qwen; "off" disables it),
+then Haiku through `claude -p` for the rows it did not answer. With OUTLOOK_SORTER_SHADOW=1, Haiku decides and the local model only answers
+alongside: each disagreement goes to stderr ("shadow:" lines), to judge the local model on real mail before letting it decide.
 
 Mail text is hostile: at worst it can make the model pick a wrong verdict from a closed list, never act. daily-pass.mjs deletes nothing
 without a confident verdict, and only recovers senders that are already known.
 The prompt and the JSON schema stay in French on purpose: the rows are French, the verdict values are read by daily-pass.mjs,
 and rewording the prompt would change the verdicts.
 """
-import json, os, re, shutil, subprocess, sys, tempfile
+import json, os, re, shutil, subprocess, sys, tempfile, urllib.request
 
-MODEL, BATCH = "haiku", 100
+MODEL, BATCH, LOCAL_BATCH = "haiku", 100, 40   # a slot of the local model holds about 16k tokens
+LOCAL_URL = os.environ.get("OUTLOOK_SORTER_LOCAL_URL", "http://127.0.0.1:11234")
+SHADOW = os.environ.get("OUTLOOK_SORTER_SHADOW") == "1"
 SCHEMA = {"type": "object", "properties": {"avis": {"type": "array", "items": {"type": "object", "properties": {
     "n": {"type": "integer"}, "verdict": {"type": "string", "enum": ["legitime", "spam", "douteux"]}, "confiance": {"type": "number"}},
     "required": ["n", "verdict", "confiance"]}}}, "required": ["avis"]}
@@ -21,6 +27,21 @@ confiance : 0 à 1. Réponds pour CHAQUE ligne, en reprenant n à l'identique.
 
 Lignes :
 """
+
+
+# The local model read "confiance" as how legitimate a mail is, and gave obvious spam 0 (tried 03/11/2026): for it only, this line says what it means.
+LOCAL_GUIDE = GUIDE.replace("confiance : 0 à 1.", "confiance : ta certitude sur le verdict que tu donnes, de 0 (au hasard) à 1 (certain), quel que soit ce verdict : un spam évident vaut 1.")
+
+
+def ask_local(block, count):
+    schema = json.loads(json.dumps(SCHEMA))
+    schema["properties"]["avis"].update(minItems=count, maxItems=count)
+    body = {"model": "local", "temperature": 0, "max_tokens": 40 * count + 200, "chat_template_kwargs": {"enable_thinking": False},
+            "messages": [{"role": "user", "content": LOCAL_GUIDE + block}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "avis", "schema": schema, "strict": True}}}
+    req = urllib.request.Request(LOCAL_URL.rstrip("/") + "/v1/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        return json.loads(json.load(r)["choices"][0]["message"]["content"])["avis"]
 
 
 def ask(block):
@@ -36,10 +57,35 @@ def ask(block):
     return res["avis"]
 
 
+def lines(part):
+    return "\n".join(json.dumps({"n": x["n"], "from": x["from"], "ligne": re.sub(r"\s+", " ", x["objet"])[:160]}, ensure_ascii=False) for x in part)
+
+
+def keep(answers, wanted):
+    """Only verdicts from the closed list, for rows that were asked: a model cannot add or rename a row."""
+    return {str(a["n"]): {"verdict": a["verdict"], "confiance": float(a["confiance"])} for a in answers
+            if a.get("n") in wanted and a.get("verdict") in ("legitime", "spam", "douteux")}
+
+
 rows = json.load(sys.stdin)
-verdicts = {}
-for i in range(0, len(rows), BATCH):
-    block = "\n".join(json.dumps({"n": x["n"], "from": x["from"], "ligne": re.sub(r"\s+", " ", x["objet"])[:160]}, ensure_ascii=False) for x in rows[i:i + BATCH])
-    for a in ask(block):
-        verdicts[str(a["n"])] = {"verdict": a["verdict"], "confiance": float(a["confiance"])}
+local = {}
+if LOCAL_URL not in ("", "off"):
+    for i in range(0, len(rows), LOCAL_BATCH):
+        part = rows[i:i + LOCAL_BATCH]
+        try:
+            local.update(keep(ask_local(lines(part), len(part)), {x["n"] for x in part}))
+        except Exception as e:
+            print(f"local model unavailable, Haiku answers: {type(e).__name__} {str(e)[:120]}", file=sys.stderr, flush=True)
+            break
+verdicts = {} if SHADOW else dict(local)
+missing = [x for x in rows if str(x["n"]) not in verdicts]
+for i in range(0, len(missing), BATCH):
+    part = missing[i:i + BATCH]
+    verdicts.update(keep(ask(lines(part)), {x["n"] for x in part}))
+if SHADOW:
+    by_n = {str(x["n"]): x for x in rows}
+    for n, v in verdicts.items():
+        q = local.get(n, {})
+        if q.get("verdict") != v["verdict"]:
+            print(f"shadow: {by_n[n]['from']} haiku={v['verdict']} ({v['confiance']}) local={q.get('verdict')} ({q.get('confiance')})", file=sys.stderr, flush=True)
 print(json.dumps(verdicts))

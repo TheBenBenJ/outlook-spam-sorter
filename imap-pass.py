@@ -50,11 +50,17 @@ def analyze(file, snapshot, analyze_args):
 
 
 def judge(rows):
-    """Haiku's verdict for each row, keyed by id. Without a verdict nothing moves: the row waits for the next run."""
+    """The model's verdict for each row (classify.py: local model, else Haiku), keyed by id. Without a verdict nothing moves: the row waits for the next run."""
     if not rows:
         return {}
     try:
-        out = json.loads(run_script("classify.py", stdin=json.dumps([{"n": n, "from": x["from"], "objet": x["objet"]} for n, x in enumerate(rows)])))
+        r = subprocess.run([sys.executable, "-I", str(HERE / "classify.py")], input=json.dumps([{"n": n, "from": x["from"], "objet": x["objet"]} for n, x in enumerate(rows)]),
+                           capture_output=True, text=True, timeout=900)
+        for line in r.stderr.splitlines():   # which model answered, and in shadow mode each disagreement: kept in the journal
+            log(" ", clean(line, 240))
+        if r.returncode != 0:
+            raise RuntimeError(f"classify.py : {r.stderr.strip()[-200:]}")
+        out = json.loads(r.stdout)
         return {x["id"]: out.get(str(n), {}) for n, x in enumerate(rows)}
     except Exception as e:
         log("Haiku verdicts unavailable:", clean(e, 200))
