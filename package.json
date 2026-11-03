@@ -1,5 +1,5 @@
 {
-  "name": "tri-spam-outlook",
+  "name": "outlook-spam-sorter",
   "private": true,
   "type": "module",
   "description": "Daily pass over Outlook.com, with no AI driving the browser",

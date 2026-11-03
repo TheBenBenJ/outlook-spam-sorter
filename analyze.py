@@ -6,7 +6,7 @@ analyze.py inbox <snapshot.json>       inbox: what to recover into Gmail, what t
 
 Snapshots: a list of {"id", "from", "l"} ("l" is the row's aria-label), read from the work/ folder only.
 Output keys and class names (legitime, connu_gmail, spam_connu, a_classer, recuperer, archiver, a_verifier...) stay French on
-purpose: they are the vocabulary of expediteurs.json and etat-outlook.json, which other components read (see the README).
+purpose: they are the vocabulary of senders.json and outlook-state.json, which other components read (see the README).
 """
 import datetime, json, re, sys, unicodedata
 from collections import defaultdict
@@ -25,11 +25,11 @@ if with_lines:
     args.remove("--lines")
 if len(args) != 1 or (WORK / args[0]).resolve().parent != WORK:
     sys.exit("usage: analyze.py [inbox | --lines] <file in the work/ folder>")
-memory = json.loads((HERE / "expediteurs.json").read_text())
+memory = json.loads((HERE / "senders.json").read_text())
 legitimate = {k.lower() for k in memory["legitimes"]}
 spam = {k.lower() for k in memory["spam_confirme_domaines"]}
 try:
-    approved = {k.lower() for k in json.loads((HERE / "approuves.json").read_text())}  # safe senders list read from Outlook: kept apart, the agent does not need to read it
+    approved = {k.lower() for k in json.loads((HERE / "approved.json").read_text())}  # safe senders list read from Outlook: kept apart, the agent does not need to read it
 except (OSError, ValueError):
     approved = set()
 me = {k.lower() for k in memory.get("moi", [])}

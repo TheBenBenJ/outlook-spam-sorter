@@ -1,3 +1,7 @@
+senders.json
+outlook-state.json
+approved.json
+# the same personal files under their names before the rename of 3 November 2026: an old copy must never be committed
 expediteurs.json
 etat-outlook.json
 approuves.json

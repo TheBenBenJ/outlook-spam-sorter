@@ -2,7 +2,7 @@
 // Daily pass over Outlook.com, with no agent and no browser window. What this script does never depends on what the mails say: mail content is hostile. Nothing is sent and no link is opened.
 // Junk folder: known senders go back to the inbox, sure spam goes to Deleted Items, the rest waits for an interactive session.
 // Inbox: the original of each stuck mail is deposited into Gmail, then archived; what Gmail already has is archived; recovered senders are added to the safe senders list.
-// daily-pass.mjs [essai]     essai = dry run: classify and print, without deleting, moving, depositing or recording anything. Only one browser at a time on this profile.
+// daily-pass.mjs [trial]     trial = dry run: classify and print, without deleting, moving, depositing or recording anything. Only one browser at a time on this profile.
 // Strings in French are either Outlook's French UI (selectors) or text that reaches the notification and the Dashboard: keep them as they are.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -11,10 +11,12 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), WORK = path.join(HERE, 'work'), EML = path.join(WORK, 'eml');
-const DRY_RUN = process.argv.includes('essai');
+const DRY_RUN = process.argv.includes('trial');
+// "trial" is the only argument: anything else, such as "essai" (the dry-run word before the rename), stops here rather than run a real pass.
+if (process.argv.slice(2).some(a => a !== 'trial')) { console.error('usage: daily-pass.mjs [trial]'); process.exit(2); }
 const OUTLOOK = 'https://outlook.live.com/mail/0/';
 const SPAM_CONFIDENCE = 0.8, MAX_DURATION = 30 * 60 * 1000;
-const { profil: profileDir, reinjecter: reinjectScript } = JSON.parse(fs.readFileSync(path.join(HERE, 'expediteurs.json')));
+const { profil: profileDir, reinjecter: reinjectScript } = JSON.parse(fs.readFileSync(path.join(HERE, 'senders.json')));
 
 const log = (...a) => console.log(new Date().toTimeString().slice(0, 8), ...a);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -46,18 +48,18 @@ async function openFolder(page, folder) {
   await page.goto(OUTLOOK + folder);
   const ready = await page.waitForSelector('[role="treeitem"]', { timeout: 90000 }).then(() => true, () => false);
   // The Dashboard looks for "Session Outlook" in this message to show its "reconnect" tile.
-  if (!ready || !page.url().startsWith(OUTLOOK)) throw new Error('Session Outlook expirée, lancer /tri-spam-outlook');
+  if (!ready || !page.url().startsWith(OUTLOOK)) throw new Error('Session Outlook expirée, lancer /outlook-spam-sorter');
   await sleep(3000);
 }
 
 // The list is virtualised: only the rows close to the viewport are in the page.
 const readList = page => page.evaluate(async () => {
-  const z = tsoListScroller();
+  const z = ossListScroller();
   if (z) { z.scrollTop = 0; await new Promise(r => setTimeout(r, 500)); }
   const seen = new Map();
   for (let k = 0, idle = 0; k < 900 && idle < 14; k++) {
     const before = seen.size;
-    for (const o of tsoListRows()) {
+    for (const o of ossListRows()) {
       const id = o.getAttribute('data-convid');
       if (id && !seen.has(id)) seen.set(id, { id, from: o.querySelector('[title*="@"]')?.getAttribute('title') || '', l: (o.getAttribute('aria-label') || '').slice(0, 300) });
     }
@@ -80,7 +82,7 @@ const clickButton = (page, label) => page.evaluate(label => {
 
 async function gone(page, ids, ms = 6000) {
   for (let t = 0; t < ms; t += 150) {
-    const left = await page.evaluate(ids => tsoListRows().some(o => ids.includes(o.getAttribute('data-convid'))), ids);
+    const left = await page.evaluate(ids => ossListRows().some(o => ids.includes(o.getAttribute('data-convid'))), ids);
     if (!left) return true;
     await sleep(150);
   }
@@ -105,9 +107,9 @@ async function eachRow(page, ids, action) {
   const pending = new Set(ids);
   for (let idle = 0; pending.size && idle < 150;) {
     const id = await page.evaluate(wanted => {
-      const o = tsoListRows().find(o => wanted.includes(o.getAttribute('data-convid')));
+      const o = ossListRows().find(o => wanted.includes(o.getAttribute('data-convid')));
       if (o) { o.click(); return o.getAttribute('data-convid'); }
-      const z = tsoListScroller();
+      const z = ossListScroller();
       if (z) z.scrollTop += z.clientHeight * 0.9;
       return null;
     }, [...pending]);
@@ -130,12 +132,12 @@ async function eachRow(page, ids, action) {
 async function inBatches(page, ids, button) {
   const pending = new Set(ids);
   let done = 0;
-  await page.evaluate(() => { const z = tsoListScroller(); if (z) z.scrollTop = 0; });
+  await page.evaluate(() => { const z = ossListScroller(); if (z) z.scrollTop = 0; });
   for (let empty = 0; pending.size && empty < 150;) {
     const r = await page.evaluate(async wanted => {
-      const rows = tsoListRows().filter(o => wanted.includes(o.getAttribute('data-convid'))).slice(0, 25);
+      const rows = ossListRows().filter(o => wanted.includes(o.getAttribute('data-convid'))).slice(0, 25);
       if (!rows.length) {
-        const z = tsoListScroller();
+        const z = ossListScroller();
         if (z) z.scrollTop += z.clientHeight * 0.9;
         return { ticked: [] };
       }
@@ -146,7 +148,7 @@ async function inBatches(page, ids, button) {
       }
       await new Promise(r => setTimeout(r, 450));
       // nothing else may be selected, such as a mail left open
-      const intruder = tsoListRows().some(o => o.getAttribute('aria-selected') === 'true' && !wanted.includes(o.getAttribute('data-convid')));
+      const intruder = ossListRows().some(o => o.getAttribute('aria-selected') === 'true' && !wanted.includes(o.getAttribute('data-convid')));
       if (intruder) rows.forEach(toggle);
       return { ticked: rows.map(o => o.getAttribute('data-convid')), intruder };
     }, [...pending]);
@@ -260,7 +262,7 @@ async function safeSenders(page, addresses) {
   return added;
 }
 
-// The reason goes to etat-outlook.json, the notification and the Dashboard: it stays in French.
+// The reason goes to outlook-state.json, the notification and the Dashboard: it stays in French.
 function fail(reason) {
   if (!DRY_RUN) runScript('record.py', ['--failure', reason]);
   console.log(`SUMMARY: ${reason}`);
@@ -273,8 +275,8 @@ try {
   ctx = await chromium.launchPersistentContext(profileDir, { channel: 'chrome', headless: true, acceptDownloads: true, viewport: { width: 1500, height: 1000 } });
   // Page helpers, prefixed so they cannot clash with Outlook's own globals.
   await ctx.addInitScript(() => {
-    window.tsoListRows = () => [...document.querySelectorAll('[role="option"]')];
-    window.tsoListScroller = () => {
+    window.ossListRows = () => [...document.querySelectorAll('[role="option"]')];
+    window.ossListScroller = () => {
       for (let z = document.querySelector('[role="option"]'); z; z = z.parentElement) {
         if (/(auto|scroll)/.test(getComputedStyle(z).overflowY) && z.scrollHeight > z.clientHeight) return z;
       }

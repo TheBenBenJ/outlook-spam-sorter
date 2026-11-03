@@ -1,5 +1,5 @@
 #!/opt/homebrew/bin/python3 -I
-"""Record a tri-spam-outlook run in expediteurs.json, approuves.json and etat-outlook.json.
+"""Record an outlook-spam-sorter run in senders.json, approved.json and outlook-state.json.
 
 Only addresses already received in Gmail enter `legitimes`, and a consumer mail provider never enters the spam domains: one spam row
 must not ban all of its users.
@@ -11,7 +11,7 @@ import argparse, datetime, json, os, re
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-MEMORY, STATE = HERE / "expediteurs.json", HERE / "etat-outlook.json"
+MEMORY, STATE = HERE / "senders.json", HERE / "outlook-state.json"
 
 p = argparse.ArgumentParser()
 for name in ("--examined", "--restored", "--deleted", "--to-review", "--recovered", "--archived", "--remaining"):
@@ -41,7 +41,7 @@ try:
     known = json.loads(Path(mem["gmail_connus"]).read_text())
 except (KeyError, OSError, ValueError):
     known = {"adresses": {}, "domaines": {}}
-APPROVED = HERE / "approuves.json"
+APPROVED = HERE / "approved.json"
 approved = set(json.loads(APPROVED.read_text())) if APPROVED.exists() else set()
 providers = set(known.get("fournisseurs") or [])
 for address in {x.lower() for x in a.legitimate}:
