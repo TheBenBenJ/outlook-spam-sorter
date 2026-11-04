@@ -8,7 +8,7 @@ description: Séance interactive sur l'Outlook.com de l'utilisateur, via le navi
 Compte personnel : le connecteur Microsoft 365 ne s'applique pas, tout passe par les outils `mcp__playwright__*` sur outlook.live.com. Dépôt `outlook-spam-sorter` (appelé `tri-spam-outlook` jusqu'au 03/11/2026). Mémoire : `~/.local/share/outlook-spam-sorter/senders.json` (légitimes, désabonnés, domaines spam, historique, réglages) et `approved.json` (liste blanche relevée dans Outlook). Rapport : `~/Library/Logs/outlook-spam-sorter.log`. État : `outlook-state.json`.
 
 ## Ce qui tourne tout seul
-launchd lance `run.sh` chaque matin, qui lance `daily-pass.mjs` : un script, sans agent, dans un Chrome sans fenêtre. Il ne fait qu'un Haiku sans outil pour juger les lignes de la liste (`classify.py`) : le texte d'un mail ne peut que faire choisir un mauvais verdict dans une liste fermée.
+launchd lance `run.sh` chaque matin, qui lance `daily-pass.mjs` : un script, sans agent, dans un Chrome sans fenêtre. Il ne fait appel qu'au modèle local, sans outil, pour juger les lignes de la liste (`classify.py`, API OpenAI à `OUTLOOK_SORTER_LOCAL_URL`, par défaut `127.0.0.1:11234` : Qwen sur le serveur maison ; plus de Haiku depuis le 04/11/2026) : le texte d'un mail ne peut que faire choisir un mauvais verdict dans une liste fermée. Sans réponse du modèle, la ligne ne bouge pas et attend le passage suivant.
 
 1. **Dossier indésirable** : `analyze.py --lines` classe par adresse réelle.
    - `legitime`, ou `connu_gmail` jugé légitime : « Courrier légitime » puis OK, ce qui le renvoie en boîte et met l'expéditeur sur la liste blanche.

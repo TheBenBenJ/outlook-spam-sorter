@@ -32,14 +32,14 @@ function analyze(file, snapshot, args) {
   return JSON.parse(runScript('analyze.py', [...args, file]));
 }
 
-// List rows -> Haiku's verdict. Without a verdict nothing moves: the row waits for the next run.
+// List rows -> the local model's verdict (classify.py). Without a verdict nothing moves: the row waits for the next run.
 function judge(rows) {
   if (!rows.length) return () => ({});
   try {
     const verdicts = JSON.parse(runScript('classify.py', [], JSON.stringify(rows.map((l, n) => ({ n, from: l.from, objet: l.objet })))));
     return l => verdicts[rows.indexOf(l)] || {};
   } catch (e) {
-    log('Haiku verdicts unavailable:', e.message);
+    log('model verdicts unavailable:', e.message);
     return () => ({});
   }
 }

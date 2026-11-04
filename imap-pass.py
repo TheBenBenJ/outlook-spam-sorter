@@ -62,12 +62,10 @@ def judged(v):
 
 
 def detail(x, v, note=""):
-    """Why, for a mail's event: its sender, analyze.py's motif, the model's verdict and, during the shadow week, the local model's when it disagreed."""
+    """Why, for a mail's event: its sender, analyze.py's motif and the model's verdict."""
     text = f"{x['from'] or '(sans adresse)'} : {x.get('motif', '')}"
     if v.get("verdict"):
         text += f", jugé {judged(v)}"
-        if v.get("local"):
-            text += f" ; le modèle local disait {judged(v['local'])}"
     return f"{text} ; {note}" if note else text
 
 
@@ -96,22 +94,29 @@ def analyze(file, snapshot, analyze_args):
 
 
 def judge(rows):
-    """The model's verdict for each row (classify.py: local model, else Haiku), keyed by id. Without a verdict nothing moves: the row waits for the next run."""
+    """The local model's verdict for each row (classify.py), keyed by id. Without a verdict nothing moves: the row waits for the next run,
+    and the pass logs one « échec » saying how many rows the model left without a verdict, and why."""
     if not rows:
         return {}
     try:
         r = subprocess.run([sys.executable, "-I", str(HERE / "classify.py")], input=json.dumps([{"n": n, "from": x["from"], "objet": x["objet"]} for n, x in enumerate(rows)]),
                            capture_output=True, text=True, timeout=900)
-        for line in r.stderr.splitlines():   # which model answered, and in shadow mode each disagreement: kept in the journal
+        for line in r.stderr.splitlines():   # how many rows the model judged, and why not all: kept in the journal
             log(" ", clean(line, 240))
         if r.returncode != 0:
             raise RuntimeError(f"classify.py : {r.stderr.strip()[-200:]}")
         out = json.loads(r.stdout)
-        return {x["id"]: out.get(str(n), {}) for n, x in enumerate(rows)}
+        verdicts = {x["id"]: out.get(str(n), {}) for n, x in enumerate(rows)}
     except Exception as e:
-        log("Haiku verdicts unavailable:", clean(e, 200))
-        event("échec", "passage Outlook", detail=f"avis des modèles indisponibles, les mails à juger attendent le prochain passage : {clean(e, 800)}")
+        log("model verdicts unavailable:", clean(e, 200))
+        event("échec", "passage Outlook", detail=f"avis du modèle local indisponibles, les mails à juger attendent le prochain passage : {clean(e, 800)}")
         return {}
+    missing = sum(not v.get("verdict") for v in verdicts.values())
+    if missing:
+        why = (r.stderr.strip().splitlines() or ["sans raison donnée"])[-1]
+        event("échec", "passage Outlook", detail=f"{missing} mail{'s' if missing > 1 else ''} sur {len(rows)} sans avis du modèle local, "
+                                                 f"{'ils attendent' if missing > 1 else 'il attend'} le prochain passage : {clean(why, 800)}")
+    return verdicts
 
 
 def header(msg, name):
