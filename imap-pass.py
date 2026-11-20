@@ -28,7 +28,7 @@ import activity  # noqa: E402
 import outlook_imap  # noqa: E402
 
 WORK, EML = DATA / "work", DATA / "work" / "eml"
-SPAM_CONFIDENCE, MAX_DURATION, CHUNK = 0.8, 30 * 60, 200
+SPAM_CONFIDENCE, MAX_DURATION, CHUNK = 0.6, 30 * 60, 200
 args = sys.argv[1:]
 if args not in ([], ["trial"]):
     sys.exit("usage: imap-pass.py [trial]")
@@ -173,7 +173,9 @@ def junk_folder(m, names):
     verdicts = judge(to_judge)
     v = lambda x: verdicts.get(x["id"], {})  # noqa: E731
     restore = by_class["legitime"] + [x for x in by_class["connu_gmail"] if v(x).get("verdict") == "legitime"]
-    new_spam = [x for x in by_class["a_classer"] if v(x).get("verdict") == "spam" and v(x).get("confiance", 0) >= SPAM_CONFIDENCE]
+    # Strict by choice (ticket 24, 20/11/2026: what waited in junk was only phishing): an unknown sender the model judges spam from 60 % on,
+    # or finds doubtful at all, goes to Deleted Items (kept 30 days). Only a "legitime" verdict, or a model without an answer, leaves it waiting.
+    new_spam = [x for x in by_class["a_classer"] if (v(x).get("verdict") == "spam" and v(x).get("confiance", 0) >= SPAM_CONFIDENCE) or v(x).get("verdict") == "douteux"]
     remove = by_class["spam_connu"] + new_spam
     waiting = [x for x in to_judge if x not in restore and x not in remove]
     log(f"junk: {len(snap)} rows, {len(restore)} to restore, {len(remove)} spam, {len(waiting)} to review")

@@ -90,7 +90,7 @@ class Local(http.server.BaseHTTPRequestHandler):
         rows = [json.loads(x) for x in body["messages"][0]["content"].splitlines() if x.startswith("{")]
         avis = []
         for r in rows:
-            avis.append({"n": r["n"], "verdict": "spam" if "xq" in r["from"] else "legitime", "confiance": 1.5 if r["from"].startswith("over@") else 0.95})
+            avis.append({"n": r["n"], "verdict": "spam" if "xq" in r["from"] else "douteux" if r["from"].startswith("dubious@") else "legitime", "confiance": 1.5 if r["from"].startswith("over@") else 0.95})
             if r["from"].startswith("twice@"):
                 avis.append({"n": r["n"], "verdict": "spam", "confiance": 0.95})
             if r["from"].startswith("invent@"):
@@ -136,6 +136,7 @@ def setup(tmp):
         ("Junk", "friend@example.org", "Photos du week-end", today),            # known in Gmail, judged legitimate: same
         ("Junk", "Casino <a@spam.example>", "BONUS 400%", today),               # known spam domain: deleted
         ("Junk", "Colis <no-reply@xq7rt.biz>", "Votre colis", today),           # unknown, judged spam: deleted
+        ("Junk", "Offre <dubious@odd.example>", "Offre spéciale", today),       # unknown, judged doubtful: deleted too (strict filtering)
         ("Junk", "Shop <news@shop.example>", "Nouveautés", today),              # unknown, judged legitimate: waits for a person
         ("INBOX", "me@example.com", "Note à moi", today),                       # my own address: archived
         ("INBOX", "stranger@unknown.example", "Bonjour", today),                # unknown and recent: waits
@@ -170,7 +171,7 @@ with tempfile.TemporaryDirectory() as d:
 
     notes = []
     ok(run(tmp, fake, notes=notes) == 0, "real pass ends well")
-    ok(fake.senders("Deleted") == ["a@spam.example", "no-reply@xq7rt.biz"], "spam to Deleted Items: known domain and confident verdict")
+    ok(fake.senders("Deleted") == ["a@spam.example", "dubious@odd.example", "no-reply@xq7rt.biz"], "spam to Deleted Items: known domain, confident verdict, doubtful unknown sender")
     ok(fake.senders("Junk") == ["news@shop.example"], "an unknown sender judged legitimate stays in junk")
     ok(fake.senders("Archivage") == ["bank@example.net", "friend@example.org", "me@example.com", "old@unknown.example"], "deposited, own and old mails archived")
     ok(fake.senders("INBOX") == ["stranger@unknown.example"], "a recent unknown sender stays in the inbox")
@@ -179,12 +180,12 @@ with tempfile.TemporaryDirectory() as d:
     st = json.loads((tmp / "outlook-state.json").read_text())
     ok(st["a_verifier"] == 2 and st["recuperes"] == 2 and st["archives"] == 4 and st["echec"] is None, "outlook-state.json written")
     mem = json.loads((tmp / "senders.json").read_text())
-    ok("friend@example.org" in mem["legitimes"] and mem["historique"][-1]["supprimes"] == 2, "senders.json: known sender learned, run in the history")
+    ok("friend@example.org" in mem["legitimes"] and mem["historique"][-1]["supprimes"] == 3, "senders.json: known sender learned, run in the history")
     ok(len(notes) == 1 and "2 à vérifier" in notes[0] and "@" not in notes[0], "notified once (more to review), without any address")
     ok(not list((tmp / "work" / "eml").iterdir()) and not list((tmp / "work").glob("*.json")), "work/ emptied")
 
     events = [json.loads(x) for x in journal.read_text().splitlines()]
-    ok(Counter(e["action"] for e in events) == {"remis en boîte": 2, "spam supprimé": 2, "à vérifier": 2, "récupéré dans Gmail": 2, "archivé": 4,
+    ok(Counter(e["action"] for e in events) == {"remis en boîte": 2, "spam supprimé": 3, "à vérifier": 2, "récupéré dans Gmail": 2, "archivé": 4,
                                                 "ajouté aux légitimes": 1, "passage terminé": 1}, "journal: one event per mail acted on, and the end of the pass")
     ok([e["object"] for e in events if e["action"] == "ajouté aux légitimes"] == ["friend@example.org"], "journal: a sender learned by record.py")
     ev = {(e["action"], e.get("detail", "").split(" : ")[0]): e for e in events}
@@ -202,7 +203,7 @@ with tempfile.TemporaryDirectory() as d:
        "journal: stuck mail handed to Gmail")
     ok(ev["archivé", "me@example.com"]["detail"].endswith("envoyé depuis une de mes adresses") and ev["archivé", "old@unknown.example"]["detail"].endswith("de plus de 90 jours")
        and ev["archivé", "bank@example.net"]["detail"].endswith("récupéré dans Gmail") and ev["archivé", "bank@example.net"]["to"] == "Archivage", "journal: archived, and why")
-    ok(ev["passage terminé", "2 remis en boîte, 2 spams supprimés, 2 déposés dans Gmail, 4 archivés, 2 à vérifier."]["object"] == "Outlook.com", "journal: the pass's counts")
+    ok(ev["passage terminé", "2 remis en boîte, 3 spams supprimés, 2 déposés dans Gmail, 4 archivés, 2 à vérifier."]["object"] == "Outlook.com", "journal: the pass's counts")
     ok(len({e["run"] for e in events}) == 1 and all(datetime.datetime.fromisoformat(e["time"]).utcoffset() is not None and "" not in e.values() for e in events)
        and journal.stat().st_mode & 0o777 == 0o600, "journal: one run, times with their offset, no empty field, mode 600")
     n = len(events)
