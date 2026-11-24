@@ -17,12 +17,23 @@ and one at the end of each pass, in French (« remis en boîte », « spam suppr
 pass (activity-waiting.json). A dry run writes no event.
 State (senders.json, approved.json, outlook-state.json, the journal, work/): $OUTLOOK_SORTER_DATA, by default this folder.
 """
-import datetime, email, email.header, email.utils, imaplib, json, os, re, signal, subprocess, sys, time
+
+import email
+import email.header
+import email.utils
+import imaplib
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
 from collections import Counter
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DATA = Path(os.environ.get("OUTLOOK_SORTER_DATA") or HERE)   # the pass's state; the code stays in HERE
+DATA = Path(os.environ.get("OUTLOOK_SORTER_DATA") or HERE)  # the pass's state; the code stays in HERE
 sys.path.insert(0, str(HERE))
 import activity  # noqa: E402
 import outlook_imap  # noqa: E402
@@ -33,13 +44,21 @@ args = sys.argv[1:]
 if args not in ([], ["trial"]):
     sys.exit("usage: imap-pass.py [trial]")
 DRY_RUN = args == ["trial"]
-RUN = activity.now()   # the start of this pass: the "run" of each of its events
+RUN = activity.now()  # the start of this pass: the "run" of each of its events
 # The journal's places and verdicts, as Benjamin reads them (not IMAP folder names)
-PLACE = {"junk": "Courrier indésirable", "inbox": "Boîte de réception", "outlook": "Boîte de réception Outlook", "trash": "Éléments supprimés",
-         "archive": "Archivage", "gmail": "Gmail"}
+PLACE = {
+    "junk": "Courrier indésirable",
+    "inbox": "Boîte de réception",
+    "outlook": "Boîte de réception Outlook",
+    "trash": "Éléments supprimés",
+    "archive": "Archivage",
+    "gmail": "Gmail",
+}
 WORDS = {"legitime": "légitime", "spam": "spam", "douteux": "douteux"}
-WAITING = activity.PATH.with_name("activity-waiting.json")   # the mails already reported « à vérifier » (folder:UID:verdict)
-reported, waiting_now = set(), set()   # keys reported by the previous passes, keys waiting at this one
+WAITING = activity.PATH.with_name(
+    "activity-waiting.json"
+)  # the mails already reported « à vérifier » (folder:UID:verdict)
+reported, waiting_now = set(), set()  # keys reported by the previous passes, keys waiting at this one
 
 
 def log(*a):
@@ -53,8 +72,16 @@ def event(action, obj, src=None, dst=None, detail=None, v=None):
     v = v or {}
     c = v.get("confiance") if v.get("verdict") else None
     confidence = min(1.0, max(0.0, float(c))) if isinstance(c, (int, float)) else None
-    activity.log(action, obj or "(sans objet)", **{"from": src, "to": dst}, detail=detail, engine=v.get("engine"), model=v.get("model"),
-                 confidence=confidence, run=RUN)
+    activity.log(
+        action,
+        obj or "(sans objet)",
+        **{"from": src, "to": dst},
+        detail=detail,
+        engine=v.get("engine"),
+        model=v.get("model"),
+        confidence=confidence,
+        run=RUN,
+    )
 
 
 def judged(v):
@@ -82,7 +109,13 @@ def clean(s, n=300):
 
 
 def run_script(name, script_args=(), stdin=None):
-    r = subprocess.run([sys.executable, "-I", str(HERE / name), *map(str, script_args)], input=stdin, capture_output=True, text=True, timeout=900)
+    r = subprocess.run(
+        [sys.executable, "-I", str(HERE / name), *map(str, script_args)],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
     if r.returncode != 0:
         raise RuntimeError(f"{name} : {(r.stderr or r.stdout).strip()[-200:]}")
     return r.stdout
@@ -99,9 +132,14 @@ def judge(rows):
     if not rows:
         return {}
     try:
-        r = subprocess.run([sys.executable, "-I", str(HERE / "classify.py")], input=json.dumps([{"n": n, "from": x["from"], "objet": x["objet"]} for n, x in enumerate(rows)]),
-                           capture_output=True, text=True, timeout=900)
-        for line in r.stderr.splitlines():   # how many rows the model judged, and why not all: kept in the journal
+        r = subprocess.run(
+            [sys.executable, "-I", str(HERE / "classify.py")],
+            input=json.dumps([{"n": n, "from": x["from"], "objet": x["objet"]} for n, x in enumerate(rows)]),
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+        for line in r.stderr.splitlines():  # how many rows the model judged, and why not all: kept in the journal
             log(" ", clean(line, 240))
         if r.returncode != 0:
             raise RuntimeError(f"classify.py : {r.stderr.strip()[-200:]}")
@@ -109,13 +147,21 @@ def judge(rows):
         verdicts = {x["id"]: out.get(str(n), {}) for n, x in enumerate(rows)}
     except Exception as e:
         log("model verdicts unavailable:", clean(e, 200))
-        event("échec", "passage Outlook", detail=f"avis du modèle local indisponibles, les mails à juger attendent le prochain passage : {clean(e, 800)}")
+        event(
+            "échec",
+            "passage Outlook",
+            detail=f"avis du modèle local indisponibles, les mails à juger attendent le prochain passage : {clean(e, 800)}",
+        )
         return {}
     missing = sum(not v.get("verdict") for v in verdicts.values())
     if missing:
         why = (r.stderr.strip().splitlines() or ["sans raison donnée"])[-1]
-        event("échec", "passage Outlook", detail=f"{missing} mail{'s' if missing > 1 else ''} sur {len(rows)} sans avis du modèle local, "
-                                                 f"{'ils attendent' if missing > 1 else 'il attend'} le prochain passage : {clean(why, 800)}")
+        event(
+            "échec",
+            "passage Outlook",
+            detail=f"{missing} mail{'s' if missing > 1 else ''} sur {len(rows)} sans avis du modèle local, "
+            f"{'ils attendent' if missing > 1 else 'il attend'} le prochain passage : {clean(why, 800)}",
+        )
     return verdicts
 
 
@@ -138,17 +184,31 @@ def snapshot(m, folder):
     uids = check(*m.uid("SEARCH", None, "ALL"), "recherche")[0].split()
     rows = []
     for i in range(0, len(uids), CHUNK):
-        data = check(*m.uid("FETCH", b",".join(uids[i:i + CHUNK]).decode(), "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])"), "lecture des en-têtes")
+        data = check(
+            *m.uid(
+                "FETCH",
+                b",".join(uids[i : i + CHUNK]).decode(),
+                "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])",
+            ),
+            "lecture des en-têtes",
+        )
         for part in data:
             if not isinstance(part, tuple):
                 continue
             uid = re.search(rb"UID (\d+)", part[0])
             when = imaplib.Internaldate2tuple(part[0])
-            msg = email.message_from_string(part[1].decode("utf-8", "replace"))   # spam often puts raw UTF-8 in headers
+            msg = email.message_from_string(part[1].decode("utf-8", "replace"))  # spam often puts raw UTF-8 in headers
             name, address = email.utils.parseaddr(header(msg, "From"))
             if uid:
-                rows.append({"id": uid[1].decode(), "from": address.strip().lower(), "l": clean(f"{name} {header(msg, 'Subject')}"),
-                             "date": time.strftime("%Y-%m-%d", when) if when else None, "subject": clean(header(msg, "Subject"))})
+                rows.append(
+                    {
+                        "id": uid[1].decode(),
+                        "from": address.strip().lower(),
+                        "l": clean(f"{name} {header(msg, 'Subject')}"),
+                        "date": time.strftime("%Y-%m-%d", when) if when else None,
+                        "subject": clean(header(msg, "Subject")),
+                    }
+                )
     return rows
 
 
@@ -157,7 +217,7 @@ def move(m, rows, dest, moved=lambda x: None):
     Never a deletion flag nor an expunge: Deleted Items keeps a mail 30 days."""
     done = 0
     for i in range(0, len(rows), CHUNK):
-        chunk = rows[i:i + CHUNK]
+        chunk = rows[i : i + CHUNK]
         check(*m.uid("MOVE", ",".join(x["id"] for x in chunk), f'"{dest}"'), "déplacement")
         done += len(chunk)
         for x in chunk:
@@ -175,7 +235,12 @@ def junk_folder(m, names):
     restore = by_class["legitime"] + [x for x in by_class["connu_gmail"] if v(x).get("verdict") == "legitime"]
     # Strict by choice (ticket 24, 20/11/2026: what waited in junk was only phishing): an unknown sender the model judges spam from 60 % on,
     # or finds doubtful at all, goes to Deleted Items (kept 30 days). Only a "legitime" verdict, or a model without an answer, leaves it waiting.
-    new_spam = [x for x in by_class["a_classer"] if (v(x).get("verdict") == "spam" and v(x).get("confiance", 0) >= SPAM_CONFIDENCE) or v(x).get("verdict") == "douteux"]
+    new_spam = [
+        x
+        for x in by_class["a_classer"]
+        if (v(x).get("verdict") == "spam" and v(x).get("confiance", 0) >= SPAM_CONFIDENCE)
+        or v(x).get("verdict") == "douteux"
+    ]
     remove = by_class["spam_connu"] + new_spam
     waiting = [x for x in to_judge if x not in restore and x not in remove]
     log(f"junk: {len(snap)} rows, {len(restore)} to restore, {len(remove)} spam, {len(waiting)} to review")
@@ -189,16 +254,35 @@ def junk_folder(m, names):
             log("  spam:", x["from"], "|", x["objet"][:70])
         return report
     # back to the inbox, where the inbox sweep below recovers them into Gmail
-    move(m, restore, "INBOX", lambda x: event("remis en boîte", subject[x["id"]], PLACE["junk"], PLACE["inbox"], detail(x, v(x)), v(x)))
+    move(
+        m,
+        restore,
+        "INBOX",
+        lambda x: event("remis en boîte", subject[x["id"]], PLACE["junk"], PLACE["inbox"], detail(x, v(x)), v(x)),
+    )
     report["restored"] = [x["from"] for x in restore]
-    report["deleted"] = move(m, remove, names["trash"], lambda x: event("spam supprimé", subject[x["id"]], PLACE["junk"], PLACE["trash"], detail(x, v(x)), v(x)))
+    report["deleted"] = move(
+        m,
+        remove,
+        names["trash"],
+        lambda x: event("spam supprimé", subject[x["id"]], PLACE["junk"], PLACE["trash"], detail(x, v(x)), v(x)),
+    )
     for x in waiting:
         verdict = v(x).get("verdict")
-        note = ("sans avis du modèle, nouvel essai au prochain passage" if not verdict
-                else "un expéditeur connu n'est jamais supprimé" if verdict == "spam" and x in by_class["connu_gmail"]
-                else f"pas assez sûr pour supprimer (il faut {round(100 * SPAM_CONFIDENCE)} %)" if verdict == "spam"
-                else "seul un expéditeur connu est remis en boîte" if verdict == "legitime" and x in by_class["a_classer"] else "")
-        review_once(f"{names['junk']}:{x['id']}:{verdict or ''}", subject[x["id"]], PLACE["junk"], detail(x, v(x), note), v(x))
+        note = (
+            "sans avis du modèle, nouvel essai au prochain passage"
+            if not verdict
+            else "un expéditeur connu n'est jamais supprimé"
+            if verdict == "spam" and x in by_class["connu_gmail"]
+            else f"pas assez sûr pour supprimer (il faut {round(100 * SPAM_CONFIDENCE)} %)"
+            if verdict == "spam"
+            else "seul un expéditeur connu est remis en boîte"
+            if verdict == "legitime" and x in by_class["a_classer"]
+            else ""
+        )
+        review_once(
+            f"{names['junk']}:{x['id']}:{verdict or ''}", subject[x["id"]], PLACE["junk"], detail(x, v(x), note), v(x)
+        )
     log(f"junk: {len(restore)} restored, {report['deleted']} deleted")
     return report
 
@@ -229,12 +313,20 @@ def inbox(m, names, script):
     verdicts = judge(a["recuperer"])
     to_recover = [x for x in a["recuperer"] if verdicts.get(x["id"], {}).get("verdict") == "legitime"]
     waiting = [x for x in a["recuperer"] if x not in to_recover]
-    log(f"inbox: {len(snap)} rows, {len(to_recover)} to recover, {len(a['archiver'])} to archive, {a['a_verifier_total'] + len(waiting)} to review, "
-        f"{a['recuperer_restants'] + a['archiver_restants']} left for a later run")
+    log(
+        f"inbox: {len(snap)} rows, {len(to_recover)} to recover, {len(a['archiver'])} to archive, {a['a_verifier_total'] + len(waiting)} to review, "
+        f"{a['recuperer_restants'] + a['archiver_restants']} left for a later run"
+    )
     for x in a["a_verifier"] + waiting:
         log("  to review:", x["from"], "|", x["objet"][:70], json.dumps(verdicts.get(x["id"], {})))
-    report = {"examined": len(snap), "deposited": 0, "recovered": set(), "archived": 0, "waiting": a["a_verifier_total"] + len(waiting),
-              "remaining": a["recuperer_restants"] + a["archiver_restants"]}
+    report = {
+        "examined": len(snap),
+        "deposited": 0,
+        "recovered": set(),
+        "archived": 0,
+        "waiting": a["a_verifier_total"] + len(waiting),
+        "remaining": a["recuperer_restants"] + a["archiver_restants"],
+    }
     if DRY_RUN:
         for x in to_recover:
             log("  to recover:", x["from"], "|", x["objet"][:70])
@@ -248,7 +340,12 @@ def inbox(m, names, script):
         if r.get("statut") == "refuse":
             report["waiting"] += 1
             log("  refused:", r.get("de"), "|", clean(r.get("objet"), 50), r.get("motif"))
-            review_once(f"INBOX:{x['id']}:refuse", subject[x["id"]], PLACE["outlook"], detail(x, {}, f"dépôt dans Gmail refusé : {clean(r.get('motif'), 300)}"))
+            review_once(
+                f"INBOX:{x['id']}:refuse",
+                subject[x["id"]],
+                PLACE["outlook"],
+                detail(x, {}, f"dépôt dans Gmail refusé : {clean(r.get('motif'), 300)}"),
+            )
         elif r.get("statut") in ("depose", "deja"):
             report["recovered"].add(x["from"])
             report["deposited"] += r["statut"] == "depose"
@@ -258,24 +355,52 @@ def inbox(m, names, script):
         else:
             report["remaining"] += 1
             log("  deposit failed:", r.get("de"), r.get("motif"))
-            event("échec", subject[x["id"]], PLACE["outlook"], PLACE["gmail"],
-                  detail(x, {}, f"dépôt dans Gmail échoué : {clean(r.get('motif'), 300) or 'sans raison donnée'}, nouvel essai au prochain passage"))
+            event(
+                "échec",
+                subject[x["id"]],
+                PLACE["outlook"],
+                PLACE["gmail"],
+                detail(
+                    x,
+                    {},
+                    f"dépôt dans Gmail échoué : {clean(r.get('motif'), 300) or 'sans raison donnée'}, nouvel essai au prochain passage",
+                ),
+            )
     for x in waiting:
         verdict = verdicts.get(x["id"], {}).get("verdict")
-        review_once(f"INBOX:{x['id']}:{verdict or ''}", subject[x["id"]], PLACE["outlook"],
-                    detail(x, verdicts.get(x["id"], {}), "" if verdict else "sans avis du modèle, nouvel essai au prochain passage"), verdicts.get(x["id"]))
+        review_once(
+            f"INBOX:{x['id']}:{verdict or ''}",
+            subject[x["id"]],
+            PLACE["outlook"],
+            detail(
+                x, verdicts.get(x["id"], {}), "" if verdict else "sans avis du modèle, nouvel essai au prochain passage"
+            ),
+            verdicts.get(x["id"]),
+        )
     for x in a["a_verifier"]:
         review_once(f"INBOX:{x['id']}:", subject[x["id"]], PLACE["outlook"], detail(x, {}))
-    report["archived"] = move(m, done + a["archiver"], names["archive"],
-                              lambda x: event("archivé", subject[x["id"]], PLACE["outlook"], PLACE["archive"], f"{x['from'] or '(sans adresse)'} : {x['motif']}"))
-    log(f"inbox: {report['deposited']} deposited, {len(report['recovered'])} senders recovered, {report['archived']} archived")
+    report["archived"] = move(
+        m,
+        done + a["archiver"],
+        names["archive"],
+        lambda x: event(
+            "archivé",
+            subject[x["id"]],
+            PLACE["outlook"],
+            PLACE["archive"],
+            f"{x['from'] or '(sans adresse)'} : {x['motif']}",
+        ),
+    )
+    log(
+        f"inbox: {report['deposited']} deposited, {len(report['recovered'])} senders recovered, {report['archived']} archived"
+    )
     return report
 
 
 def state():
     try:
         return json.loads((DATA / "outlook-state.json").read_text())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
 
 
@@ -326,7 +451,7 @@ def main():
     settings = json.loads((DATA / "senders.json").read_text())
     try:
         reported.update(json.loads(WAITING.read_text()))
-    except (OSError, ValueError, TypeError):
+    except OSError, ValueError, TypeError:
         pass
     m = None
     try:
@@ -338,20 +463,49 @@ def main():
         if not DRY_RUN:
             save_waiting()
             per_domain = Counter(x["from"].rpartition("@")[2] for x in junk["new_spam"])
-            out = run_script("record.py", ["--examined", junk["examined"] + box["examined"], "--restored", len(junk["restored"]), "--deleted", junk["deleted"],
-                                           "--to-review", to_review, "--recovered", box["deposited"], "--archived", box["archived"], "--remaining", box["remaining"],
-                                           "--spam", *[d for d, n in per_domain.items() if n >= 3], "--legitimate", *junk["restored"]])
+            out = run_script(
+                "record.py",
+                [
+                    "--examined",
+                    junk["examined"] + box["examined"],
+                    "--restored",
+                    len(junk["restored"]),
+                    "--deleted",
+                    junk["deleted"],
+                    "--to-review",
+                    to_review,
+                    "--recovered",
+                    box["deposited"],
+                    "--archived",
+                    box["archived"],
+                    "--remaining",
+                    box["remaining"],
+                    "--spam",
+                    *[d for d, n in per_domain.items() if n >= 3],
+                    "--legitimate",
+                    *junk["restored"],
+                ],
+            )
             try:
                 learned = dict(json.loads(out))
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 learned = {}
             for address in learned.get("legitimate", []):
-                event("ajouté aux légitimes", address, detail="déjà reçu dans Gmail : ses mails indésirables seront remis en boîte sans avis du modèle")
+                event(
+                    "ajouté aux légitimes",
+                    address,
+                    detail="déjà reçu dans Gmail : ses mails indésirables seront remis en boîte sans avis du modèle",
+                )
             for domain in learned.get("spam", []):
-                event("ajouté aux domaines spam", domain,
-                      detail=f"{per_domain[domain]} spams sûrs de ce domaine à ce passage : ses prochains mails seront supprimés sans avis du modèle")
-        summary = (f"{'essai, rien de changé. ' if DRY_RUN else ''}{len(junk['restored'])} remis en boîte, {junk['deleted']} spams supprimés, "
-                   f"{box['deposited']} déposés dans Gmail, {box['archived']} archivés, {to_review} à vérifier.")
+                event(
+                    "ajouté aux domaines spam",
+                    domain,
+                    detail=f"{per_domain[domain]} spams sûrs de ce domaine à ce passage : ses prochains mails seront supprimés sans avis du modèle",
+                )
+        summary = (
+            f"{'essai, rien de changé. ' if DRY_RUN else ''}{len(junk['restored'])} remis en boîte, {junk['deleted']} spams supprimés, "
+            f"{box['deposited']} déposés dans Gmail, {box['archived']} archivés, {to_review} à vérifier."
+        )
         print(f"SUMMARY: {summary}", flush=True)
         event("passage terminé", "Outlook.com", detail=summary)
         if not DRY_RUN and to_review > before:

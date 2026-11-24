@@ -69,6 +69,12 @@ jobs:
           while IFS= read -r f; do python -m py_compile "$f" || status=1; done < "$RUNNER_TEMP/python.list"
           exit $status
 
+      - name: Python (Ruff lint and format)
+        run: |
+          pip install --quiet ruff
+          ruff check .
+          ruff format --check .
+
       - name: Offline tests of the IMAP pass and classify.py (fake IMAP server, fake local model)
         run: python -I tests.py
 

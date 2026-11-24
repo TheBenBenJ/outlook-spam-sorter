@@ -10,15 +10,25 @@ Output keys and class names (legitime, connu_gmail, spam_connu, a_classer, recup
 purpose: they are the vocabulary of senders.json and outlook-state.json, which other components read (see the README).
 Each row carries a "motif": why it falls in its class or list, in French, for the activity journal that Benjamin reads.
 """
-import datetime, json, os, re, sys, unicodedata
+
+import datetime
+import json
+import os
+import re
+import sys
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
-DATA = Path(os.environ.get("OUTLOOK_SORTER_DATA") or Path(__file__).resolve().parent)   # senders.json, approved.json, work/
+DATA = Path(
+    os.environ.get("OUTLOOK_SORTER_DATA") or Path(__file__).resolve().parent
+)  # senders.json, approved.json, work/
 WORK = (DATA / "work").resolve()
 MAX_RECOVERIES, MAX_ARCHIVES = 100, 300  # per run, to bound its duration: the rest waits for the next run
 RECENT_DAYS = 90  # an older unknown sender is archived without recovery: nothing urgent is left in it
-DISPOSABLE = re.compile(r"\+|[0-9a-f]{8}-[0-9a-f]{4}|^thread-|^[^@]{25,}@")  # address specific to one ticket or order: useless on the safe senders list
+DISPOSABLE = re.compile(
+    r"\+|[0-9a-f]{8}-[0-9a-f]{4}|^thread-|^[^@]{25,}@"
+)  # address specific to one ticket or order: useless on the safe senders list
 
 args = sys.argv[1:]
 mode = args.pop(0) if args and args[0] == "inbox" else "junk"
@@ -31,8 +41,10 @@ memory = json.loads((DATA / "senders.json").read_text())
 legitimate = {k.lower() for k in memory["legitimes"]}
 spam = {k.lower() for k in memory["spam_confirme_domaines"]}
 try:
-    approved = {k.lower() for k in json.loads((DATA / "approved.json").read_text())}  # safe senders list read from Outlook: kept apart, the agent does not need to read it
-except (OSError, ValueError):
+    approved = {
+        k.lower() for k in json.loads((DATA / "approved.json").read_text())
+    }  # safe senders list read from Outlook: kept apart, the agent does not need to read it
+except OSError, ValueError:
     approved = set()
 me = {k.lower() for k in memory.get("moi", [])}
 since = memory.get("recuperer_depuis", "2000-01-01")
@@ -40,7 +52,7 @@ noise = tuple(memory.get("libelles_bruit", []))
 unreliable = tuple(memory.get("libelles_non_fiables", []))
 try:
     known = json.loads(Path(memory["gmail_connus"]).read_text())
-except (KeyError, OSError, ValueError):
+except KeyError, OSError, ValueError:
     known = {"adresses": {}, "domaines": {}, "libelles": {}, "exacts": {}, "recents": []}
 
 
@@ -55,14 +67,23 @@ def known_in_gmail(address, domain):
 def class_of(address, domain):
     """-> (class, motif)."""
     if address in legitimate or domain in legitimate:
-        return "legitime", "adresse reconnue comme légitime" if address in legitimate else "domaine reconnu comme légitime"
+        return (
+            "legitime",
+            "adresse reconnue comme légitime" if address in legitimate else "domaine reconnu comme légitime",
+        )
     if domain in spam:
         return "spam_connu", "domaine connu pour le spam"
-    return ("connu_gmail", "expéditeur déjà reçu dans Gmail") if known_in_gmail(address, domain) else ("a_classer", "expéditeur inconnu")
+    return (
+        ("connu_gmail", "expéditeur déjà reçu dans Gmail")
+        if known_in_gmail(address, domain)
+        else ("a_classer", "expéditeur inconnu")
+    )
 
 
 snapshot = json.loads((WORK / args[0]).read_text())
-if isinstance(snapshot, str):  # browser_evaluate saves what the page returns as is: a JSON.stringify arrives double-encoded
+if isinstance(
+    snapshot, str
+):  # browser_evaluate saves what the page returns as is: a JSON.stringify arrives double-encoded
     snapshot = json.loads(snapshot)
 
 
@@ -79,16 +100,30 @@ def analyze_junk():
         if len(g["exemples"]) < 2:
             g["exemples"].append(str(m.get("l") or "")[:120])
         rows[c].append({"id": m["id"], "from": address, "objet": str(m.get("l") or "")[:160], "motif": why})
-    output = {"total": len(snapshot), "groupes": [
-        {"classe": c, "domaine": d, "nombre": g["nombre"], "adresses": sorted(g["adresses"])[:5], "exemples": g["exemples"]}
-        for (c, d), g in sorted(groups.items(), key=lambda x: (x[0][0], -x[1]["nombre"]))]}
+    output = {
+        "total": len(snapshot),
+        "groupes": [
+            {
+                "classe": c,
+                "domaine": d,
+                "nombre": g["nombre"],
+                "adresses": sorted(g["adresses"])[:5],
+                "exemples": g["exemples"],
+            }
+            for (c, d), g in sorted(groups.items(), key=lambda x: (x[0][0], -x[1]["nombre"]))
+        ],
+    }
     if with_lines:
         output["lignes"] = rows
     print(json.dumps(output, ensure_ascii=False, indent=0))
 
 
 def flatten(t):
-    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", (t or "").encode("utf-8", "ignore").decode("utf-8")).lower().replace("\xa0", " ")).strip()
+    return re.sub(
+        r"\s+",
+        " ",
+        unicodedata.normalize("NFC", (t or "").encode("utf-8", "ignore").decode("utf-8")).lower().replace("\xa0", " "),
+    ).strip()
 
 
 def row_date(row_text):
@@ -132,7 +167,9 @@ def analyze_inbox():
     for m in snapshot:
         address = str(m.get("from") or "").strip().lower()
         row_text = str(m.get("l") or "")
-        d = datetime.date.fromisoformat(m["date"]) if m.get("date") else row_date(row_text)  # imap-pass.py gives the received date; the browser pass reads it in the row
+        d = (
+            datetime.date.fromisoformat(m["date"]) if m.get("date") else row_date(row_text)
+        )  # imap-pass.py gives the received date; the browser pass reads it in the row
         day = d.isoformat() if d else "0000-00-00"  # unreadable date: treated as old, the mail stays in the archive
         text = flatten(row_text)
         window = {(d + datetime.timedelta(days=k)).isoformat() for k in (-1, 0, 1)} if d else set()
@@ -140,9 +177,17 @@ def analyze_inbox():
         label = gmail_label(address) or ""
         row = {"id": m["id"], "from": address, "date": day, "objet": row_text[:160]}
         domain = address.rpartition("@")[2]
-        trust = ("adresse reconnue comme légitime" if address in legitimate else "domaine reconnu comme légitime" if domain in legitimate
-                 else "expéditeur déjà reçu dans Gmail" if known_in_gmail(address, domain)
-                 else f"expéditeur rangé dans Gmail sous « {label} »" if label and not label.startswith(unreliable) else None)
+        trust = (
+            "adresse reconnue comme légitime"
+            if address in legitimate
+            else "domaine reconnu comme légitime"
+            if domain in legitimate
+            else "expéditeur déjà reçu dans Gmail"
+            if known_in_gmail(address, domain)
+            else f"expéditeur rangé dans Gmail sous « {label} »"
+            if label and not label.startswith(unreliable)
+            else None
+        )
         if address in me:
             to, row["motif"] = archive, "envoyé depuis une de mes adresses"
         elif already_in_gmail:
@@ -153,8 +198,14 @@ def analyze_inbox():
             to, row["motif"] = archive, f"bruit, rangé dans Gmail sous « {label} »"
         elif domain in spam:
             to, row["motif"] = review, "domaine connu pour le spam"
-        elif not trust:  # the inbox also holds phishing that got through the filters: never recover nor approve an unknown sender
-            to, row["motif"] = (review, "expéditeur inconnu") if day >= recent_since else (archive, f"expéditeur inconnu, mail de plus de {RECENT_DAYS} jours")
+        elif (
+            not trust
+        ):  # the inbox also holds phishing that got through the filters: never recover nor approve an unknown sender
+            to, row["motif"] = (
+                (review, "expéditeur inconnu")
+                if day >= recent_since
+                else (archive, f"expéditeur inconnu, mail de plus de {RECENT_DAYS} jours")
+            )
         else:
             to, row["motif"] = recover, trust
         to.append(row)
@@ -163,8 +214,22 @@ def analyze_inbox():
     batch = recover[:MAX_RECOVERIES]
     approve = sorted({x["from"] for x in batch if x["from"] not in approved and not DISPOSABLE.search(x["from"])})
     review.sort(key=lambda x: x["date"], reverse=True)
-    print(json.dumps({"total": len(snapshot), "a_verifier": review[:50], "a_verifier_total": len(review), "recuperer": batch, "recuperer_restants": len(recover) - len(batch),
-                      "archiver": archive[:MAX_ARCHIVES], "archiver_restants": max(0, len(archive) - MAX_ARCHIVES), "approuver": approve}, ensure_ascii=False, indent=0))
+    print(
+        json.dumps(
+            {
+                "total": len(snapshot),
+                "a_verifier": review[:50],
+                "a_verifier_total": len(review),
+                "recuperer": batch,
+                "recuperer_restants": len(recover) - len(batch),
+                "archiver": archive[:MAX_ARCHIVES],
+                "archiver_restants": max(0, len(archive) - MAX_ARCHIVES),
+                "approuver": approve,
+            },
+            ensure_ascii=False,
+            indent=0,
+        )
+    )
 
 
 analyze_inbox() if mode == "inbox" else analyze_junk()

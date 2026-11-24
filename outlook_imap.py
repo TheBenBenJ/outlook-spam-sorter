@@ -8,7 +8,17 @@ outlook_imap.py check                   connects and lists the folders, changes 
 (no client secret). The refresh token goes to $OUTLOOK_SORTER_TOKEN (default ~/.config/outlook-spam-sorter/token.json, mode 600),
 is never printed, and is replaced whenever Microsoft rotates it. Messages that reach a person stay in French, like the rest of the pass.
 """
-import base64, imaplib, json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
+
+import base64
+import imaplib
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 AUTHORITY = "https://login.microsoftonline.com/consumers/oauth2/v2.0"
@@ -24,7 +34,9 @@ class AuthError(Exception):
 
 
 def post(url, fields):
-    req = urllib.request.Request(url, urllib.parse.urlencode(fields).encode(), {"Content-Type": "application/x-www-form-urlencoded"})
+    req = urllib.request.Request(
+        url, urllib.parse.urlencode(fields).encode(), {"Content-Type": "application/x-www-form-urlencoded"}
+    )
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)
@@ -48,11 +60,21 @@ def authorize(client_id):
     r = post(f"{AUTHORITY}/devicecode", {"client_id": client_id, "scope": f"openid email offline_access {SCOPE}"})
     if "device_code" not in r:
         sys.exit(f"Refus de Microsoft : {r.get('error')} — {str(r.get('error_description'))[:300]}")
-    print(f"Sur n'importe quel appareil, ouvre {r['verification_uri']} et saisis le code {r['user_code']} (valable {r['expires_in'] // 60} min).", flush=True)
+    print(
+        f"Sur n'importe quel appareil, ouvre {r['verification_uri']} et saisis le code {r['user_code']} (valable {r['expires_in'] // 60} min).",
+        flush=True,
+    )
     interval, deadline = int(r.get("interval", 5)), time.time() + int(r["expires_in"])
     while time.time() < deadline:
         time.sleep(interval)
-        t = post(f"{AUTHORITY}/token", {"client_id": client_id, "grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": r["device_code"]})
+        t = post(
+            f"{AUTHORITY}/token",
+            {
+                "client_id": client_id,
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                "device_code": r["device_code"],
+            },
+        )
         if t.get("error") == "authorization_pending":
             continue
         if t.get("error") == "slow_down":
@@ -75,9 +97,17 @@ def access_token():
     """-> (address, access token). AuthError when the grant is missing, revoked or expired: only a person can renew it."""
     try:
         state = json.loads(TOKEN.read_text())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         raise AuthError(EXPIRED)
-    t = post(f"{AUTHORITY}/token", {"client_id": state["client_id"], "grant_type": "refresh_token", "refresh_token": state["refresh_token"], "scope": f"offline_access {SCOPE}"})
+    t = post(
+        f"{AUTHORITY}/token",
+        {
+            "client_id": state["client_id"],
+            "grant_type": "refresh_token",
+            "refresh_token": state["refresh_token"],
+            "scope": f"offline_access {SCOPE}",
+        },
+    )
     if "access_token" not in t:
         if t.get("error") in ("invalid_grant", "interaction_required", "unauthorized_client", "invalid_client"):
             raise AuthError(EXPIRED)
@@ -99,11 +129,22 @@ def connect():
 
 def mutf7(s):
     """Folder names are in modified UTF-7 (RFC 3501): "Courrier ind&AOk-sirable" reads "Courrier indésirable"."""
-    return re.sub(r"&([^-]*)-", lambda x: "&" if not x[1] else base64.b64decode(x[1].replace(",", "/") + "=" * (-len(x[1]) % 4)).decode("utf-16-be", "replace"), s)
+    return re.sub(
+        r"&([^-]*)-",
+        lambda x: (
+            "&"
+            if not x[1]
+            else base64.b64decode(x[1].replace(",", "/") + "=" * (-len(x[1]) % 4)).decode("utf-16-be", "replace")
+        ),
+        s,
+    )
 
 
-ROLES = {"junk": ("\\Junk", ("junk", "junk email", "courrier indésirable")), "trash": ("\\Trash", ("deleted", "deleted items", "éléments supprimés")),
-         "archive": ("\\Archive", ("archive", "archives", "archivage"))}
+ROLES = {
+    "junk": ("\\Junk", ("junk", "junk email", "courrier indésirable")),
+    "trash": ("\\Trash", ("deleted", "deleted items", "éléments supprimés")),
+    "archive": ("\\Archive", ("archive", "archives", "archivage")),
+}
 
 
 def folders(m):

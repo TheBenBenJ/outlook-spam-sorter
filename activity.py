@@ -8,13 +8,19 @@ at most. Writing never raises: a journal that cannot be written must not stop th
 Path: $OUTLOOK_SORTER_ACTIVITY, by default activity.jsonl next to the pass's state (senders.json, outlook-state.json): in $OUTLOOK_SORTER_DATA,
 by default this folder.
 """
-import datetime, json, os
+
+import datetime
+import json
+import os
 from pathlib import Path
 
-PATH = Path(os.environ.get("OUTLOOK_SORTER_ACTIVITY") or Path(os.environ.get("OUTLOOK_SORTER_DATA") or Path(__file__).resolve().parent) / "activity.jsonl")
+PATH = Path(
+    os.environ.get("OUTLOOK_SORTER_ACTIVITY")
+    or Path(os.environ.get("OUTLOOK_SORTER_DATA") or Path(__file__).resolve().parent) / "activity.jsonl"
+)
 MAX_BYTES, KEEP_DAYS, KEEP_LINES = 5_000_000, 90, 20_000
 LIMITS = {"object": 300, "from": 300, "to": 300, "detail": 1000}
-rotated = False   # once per run: 20,000 long lines may stay above 5 MB, and rewriting the file at every event would be wasteful
+rotated = False  # once per run: 20,000 long lines may stay above 5 MB, and rewriting the file at every event would be wasteful
 
 
 def now():
@@ -31,7 +37,7 @@ def log(action, obj, **fields):
             if isinstance(ev.get(k), str):
                 ev[k] = ev[k][:n]
         line = json.dumps(ev, ensure_ascii=False)
-        for c in "\x85  ":   # line breaks for some readers (str.splitlines): escaped, the JSON value stays the same
+        for c in "\x85  ":  # line breaks for some readers (str.splitlines): escaped, the JSON value stays the same
             line = line.replace(c, f"\\u{ord(c):04x}")
         fd = os.open(PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
@@ -55,7 +61,7 @@ def rotate():
             try:
                 if datetime.datetime.fromisoformat(json.loads(line)["time"]) >= since:
                     kept.append(line.rstrip("\n") + "\n")
-            except (ValueError, KeyError, TypeError):
+            except ValueError, KeyError, TypeError:
                 continue
     tmp = PATH.with_name(f".{PATH.name}.tmp")
     try:
