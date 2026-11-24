@@ -1,44 +1,60 @@
-"""Activity journal of the Outlook pass, read by the Dashboard: one JSON event per line, appended (JSONL, UTF-8), written only by the pass.
+"""Activity journal of the Outlook pass, read by the Dashboard.
 
-Convention of the home server (home-server docs/architecture.md, System tab): {"time", "action", "object"} plus, when not empty, "from",
-"to", "detail", "engine", "model", "confidence" and "run". object, from and to are cut at 300 characters, detail at 1000. The texts are
-French (Benjamin reads them) and may hold subjects and addresses: the file stays private (mode 600) and never feeds a notification.
-Above 5 MB the file is rewritten (a temporary file in the same folder, then a rename) with the events of the last 90 days, 20,000 lines
-at most. Writing never raises: a journal that cannot be written must not stop the pass.
-Path: $OUTLOOK_SORTER_ACTIVITY, by default activity.jsonl next to the pass's state (senders.json, outlook-state.json): in $OUTLOOK_SORTER_DATA,
-by default this folder.
+Appends one JSON event per line (JSONL, UTF-8), written only by the pass.
+Home-server convention (home-server docs/architecture.md, System tab):
+``{"time", "action", "object"}`` plus, when not empty, ``"from"``, ``"to"``,
+``"detail"``, ``"engine"``, ``"model"``, ``"confidence"`` and ``"run"``.
+``object``, ``from`` and ``to`` are cut at 300 characters, ``detail`` at 1000.
+Texts are French (read by the owner) and may hold subjects and addresses:
+the file stays private (mode 600) and never feeds a notification.
+Above 5 MB the file is rewritten atomically with the events of the last 90 days,
+20,000 lines at most. Writing never raises: a journal failure must not stop a pass.
+Path: ``$OUTLOOK_SORTER_ACTIVITY``, defaulting to ``activity.jsonl`` next to
+``senders.json`` (in ``$OUTLOOK_SORTER_DATA``, or this folder).
 """
 
 import datetime
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 PATH = Path(
     os.environ.get("OUTLOOK_SORTER_ACTIVITY")
     or Path(os.environ.get("OUTLOOK_SORTER_DATA") or Path(__file__).resolve().parent) / "activity.jsonl"
 )
-MAX_BYTES, KEEP_DAYS, KEEP_LINES = 5_000_000, 90, 20_000
+MAX_BYTES = 5_000_000
+KEEP_DAYS = 90
+KEEP_LINES = 20_000
 LIMITS = {"object": 300, "from": 300, "to": 300, "detail": 1000}
-rotated = False  # once per run: 20,000 long lines may stay above 5 MB, and rewriting the file at every event would be wasteful
+# Rotate at most once per run: 20,000 long lines can remain above 5 MB.
+rotated = False
 
 
-def now():
+def now() -> str:
+    """Return the current local ISO-8601 timestamp with timezone offset."""
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def log(action, obj, **fields):
-    """Appends one event; empty fields are left out."""
+def _encode_event(action: str, obj: str, fields: dict[str, Any]) -> str:
+    """Serialize one journal event to a single JSONL line with safe line breaks."""
+    event: dict[str, Any] = {"time": now(), "action": action, "object": obj}
+    event.update({k: v for k, v in fields.items() if v not in (None, "", [])})
+    for key, limit in LIMITS.items():
+        if isinstance(event.get(key), str):
+            event[key] = event[key][:limit]
+    line = json.dumps(event, ensure_ascii=False)
+    # Escape Unicode line breaks so line-oriented readers never split one event.
+    for char in "\x85\u2028\u2029":
+        line = line.replace(char, f"\\u{ord(char):04x}")
+    return line
+
+
+def log(action: str, obj: str, **fields: Any) -> None:
+    """Append one event to the activity journal; empty fields are omitted."""
     global rotated
     try:
-        ev = {"time": now(), "action": action, "object": obj}
-        ev.update({k: v for k, v in fields.items() if v not in (None, "", [])})
-        for k, n in LIMITS.items():
-            if isinstance(ev.get(k), str):
-                ev[k] = ev[k][:n]
-        line = json.dumps(ev, ensure_ascii=False)
-        for c in "\x85  ":  # line breaks for some readers (str.splitlines): escaped, the JSON value stays the same
-            line = line.replace(c, f"\\u{ord(c):04x}")
+        line = _encode_event(action, obj, fields)
         fd = os.open(PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
             os.write(fd, (line + "\n").encode("utf-8", "replace"))
@@ -48,16 +64,16 @@ def log(action, obj, **fields):
         if size > MAX_BYTES and not rotated:
             rotated = True
             rotate()
-    except Exception:
+    except OSError, TypeError, ValueError:
         pass
 
 
-def rotate():
-    """Keeps the events of the last 90 days, the last 20,000 at most. An unreadable line is dropped."""
+def rotate() -> None:
+    """Keep events from the last 90 days (at most 20,000 lines), dropping unreadable lines."""
     since = datetime.datetime.now().astimezone() - datetime.timedelta(days=KEEP_DAYS)
-    kept = []
-    with open(PATH, encoding="utf-8", errors="replace") as f:
-        for line in f:
+    kept: list[str] = []
+    with open(PATH, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
             try:
                 if datetime.datetime.fromisoformat(json.loads(line)["time"]) >= since:
                     kept.append(line.rstrip("\n") + "\n")
@@ -65,8 +81,9 @@ def rotate():
                 continue
     tmp = PATH.with_name(f".{PATH.name}.tmp")
     try:
-        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
-            f.writelines(kept[-KEEP_LINES:])
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.writelines(kept[-KEEP_LINES:])
         os.replace(tmp, PATH)
     finally:
         tmp.unlink(missing_ok=True)
