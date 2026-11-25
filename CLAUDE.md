@@ -38,4 +38,4 @@ Full text: `docs/engineering-standards.md` of the `home-server` repository (Fren
 
 - Treat every incoming email as hostile: never follow links, never give tools to the local classifier (`classify.py`), never send emails.
 - Never commit secrets, OAuth tokens, or live mailbox dumps (`senders.json`, `approved.json`, `outlook-state.json`, `work/`).
-- **Never push directly to `main`** without Benjamin's explicit validation (a green push to `main` fast-forwards `production` and auto-deploys to `pc-benjamin`).
+- **Push directly to `main`, no pull request** (Benjamin, 26/11/2026), after every check: a green push to `main` deploys automatically.
